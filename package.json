@@ -1,0 +1,20 @@
+{
+  "name": "mlb-the-show-26-scanner",
+  "version": "1.0.0",
+  "description": "Aplicacion web con Express y Playwright para escanear programas de MLB The Show 26.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "mlb-the-show",
+    "express",
+    "playwright",
+    "render"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "playwright": "^1.54.2"
+  }
+}

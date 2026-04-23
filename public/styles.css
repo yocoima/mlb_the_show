@@ -1,0 +1,244 @@
+:root {
+  --bg: #08111f;
+  --bg-accent: #0f1f36;
+  --panel: rgba(8, 17, 31, 0.74);
+  --panel-border: rgba(130, 175, 255, 0.18);
+  --text: #edf4ff;
+  --muted: #9eb2cf;
+  --primary: #4db6ff;
+  --primary-strong: #1a7cff;
+  --success: #7de2a7;
+  --danger: #ff8b94;
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: 'Barlow', sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top, rgba(77, 182, 255, 0.2), transparent 30%),
+    linear-gradient(180deg, #09111d 0%, #0a1630 45%, #07111d 100%);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.6), transparent);
+}
+
+.shell {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 48px 0 64px;
+}
+
+.hero {
+  padding: 36px;
+  border: 1px solid var(--panel-border);
+  border-radius: 28px;
+  background: linear-gradient(135deg, rgba(16, 35, 64, 0.9), rgba(8, 17, 31, 0.9));
+  box-shadow: var(--shadow);
+}
+
+.eyebrow,
+.panel-label {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+
+.hero h1,
+.table-header h2 {
+  margin: 0;
+}
+
+.hero h1 {
+  max-width: 700px;
+  font-size: clamp(2.4rem, 5vw, 4.6rem);
+  line-height: 0.95;
+}
+
+.lede {
+  max-width: 720px;
+  margin: 18px 0 0;
+  font-size: 1.05rem;
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  margin-top: 28px;
+}
+
+.primary-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 22px;
+  font: inherit;
+  font-weight: 800;
+  color: #041221;
+  background: linear-gradient(135deg, #7fd5ff, #3d8cff);
+  cursor: pointer;
+  box-shadow: 0 16px 34px rgba(61, 140, 255, 0.28);
+  transition: transform 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
+}
+
+.primary-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 22px 40px rgba(61, 140, 255, 0.34);
+}
+
+.primary-button:disabled {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+.status {
+  color: var(--muted);
+}
+
+.panel {
+  margin-top: 22px;
+  border: 1px solid var(--panel-border);
+  border-radius: 24px;
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow);
+}
+
+.summary-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  padding: 24px 28px;
+}
+
+.panel-value {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.table-panel {
+  overflow: hidden;
+}
+
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: end;
+  padding: 24px 28px 14px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 16px 28px;
+  text-align: left;
+  border-top: 1px solid rgba(158, 178, 207, 0.12);
+}
+
+th {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+td {
+  vertical-align: middle;
+}
+
+.mission-name {
+  font-weight: 700;
+}
+
+.progress-cell {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 220px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #74e2a8, #4db6ff);
+}
+
+.empty-row td {
+  color: var(--muted);
+}
+
+.error-banner {
+  margin-top: 22px;
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 139, 148, 0.36);
+  border-radius: 18px;
+  color: #ffd7da;
+  background: rgba(92, 20, 28, 0.5);
+}
+
+.hidden {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .shell {
+    width: min(100% - 20px, 1120px);
+    padding-top: 22px;
+  }
+
+  .hero,
+  .summary-panel,
+  .table-header,
+  th,
+  td {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .summary-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .progress-cell {
+    min-width: 180px;
+  }
+}

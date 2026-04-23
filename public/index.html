@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MLB The Show 26 Scanner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">Diamond Dynasty</p>
+        <h1>Scanner de programas para MLB The Show 26</h1>
+        <p class="lede">
+          Lanza Playwright, espera tu login y transforma las misiones activas en
+          una lista accionable para grindear mas rapido.
+        </p>
+
+        <div class="actions">
+          <button id="scan-button" class="primary-button">Escanear programas</button>
+          <span id="status" class="status">Listo para iniciar.</span>
+        </div>
+      </section>
+
+      <section class="panel summary-panel">
+        <div>
+          <p class="panel-label">Ultimo escaneo</p>
+          <p id="scan-time" class="panel-value">Todavia no ejecutado</p>
+        </div>
+        <div>
+          <p class="panel-label">Misiones detectadas</p>
+          <p id="mission-total" class="panel-value">0</p>
+        </div>
+      </section>
+
+      <section id="error-banner" class="error-banner hidden"></section>
+
+      <section class="panel table-panel">
+        <div class="table-header">
+          <div>
+            <p class="panel-label">Resultados</p>
+            <h2>Objetivos sugeridos</h2>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Mision</th>
+                <th>Progreso</th>
+                <th>Avance</th>
+                <th>Sugerencia</th>
+              </tr>
+            </thead>
+            <tbody id="missions-body">
+              <tr class="empty-row">
+                <td colspan="4">Todavia no hay datos. Ejecuta un escaneo para ver resultados.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

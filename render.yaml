@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: mlb-the-show-26-scanner
+    runtime: node
+    plan: free
+    buildCommand: npm install && npx playwright install --with-deps chromium
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
