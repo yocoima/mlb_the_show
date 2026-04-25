@@ -18,15 +18,40 @@
         <p class="eyebrow">Diamond Dynasty</p>
         <h1>Scanner de programas para MLB The Show 26</h1>
         <p class="lede">
-          Lanza Playwright, espera tu login y transforma las misiones activas en
-          una lista accionable para grindear mas rapido.
+          Importa manualmente una sesion exportada desde tu navegador normal y
+          luego reutilizala para escanear programas desde cualquier dispositivo.
         </p>
 
         <div class="actions">
+          <button id="import-button" class="secondary-button">Importar sesion</button>
           <button id="scan-button" class="primary-button">Escanear programas</button>
+          <button id="cancel-scan-button" class="ghost-button">Detener escaneo</button>
+          <button id="reset-button" class="ghost-button">Reiniciar sesion</button>
           <span id="status" class="status">Listo para iniciar.</span>
         </div>
       </section>
+
+      <details class="panel import-panel">
+        <summary class="import-summary">
+          <div>
+            <p class="panel-label">Importacion manual</p>
+            <h2>Cookies o storageState</h2>
+          </div>
+          <p class="import-summary-copy">Abrir panel</p>
+        </summary>
+        <div class="import-body">
+          <p class="import-help">
+            Pega aqui un JSON exportado desde tu navegador. Se acepta un arreglo
+            de cookies o un objeto tipo Playwright con `cookies` y `origins`.
+          </p>
+          <textarea
+            id="session-input"
+            class="session-input"
+            spellcheck="false"
+            placeholder='Ejemplo: {"cookies":[{"name":"sid","value":"...","domain":".theshow.com","path":"/"}],"origins":[]}'
+          ></textarea>
+        </div>
+      </details>
 
       <section class="panel summary-panel">
         <div>
@@ -37,9 +62,54 @@
           <p class="panel-label">Misiones detectadas</p>
           <p id="mission-total" class="panel-value">0</p>
         </div>
+        <div>
+          <p class="panel-label">Sesion persistida</p>
+          <p id="session-state" class="panel-value">Comprobando...</p>
+        </div>
+        <div>
+          <p class="panel-label">Ultima verificacion</p>
+          <p id="session-checked-at" class="panel-value">Pendiente</p>
+        </div>
+      </section>
+
+      <section class="panel inventory-panel">
+        <div class="table-header">
+          <div>
+            <p class="panel-label">Inventario</p>
+            <h2>Cartas disponibles</h2>
+          </div>
+          <div class="selector-actions">
+            <button id="scan-inventory-button" class="secondary-button">Escanear inventario</button>
+          </div>
+        </div>
+        <div class="inventory-summary">
+          <div>
+            <p class="panel-label">Ultima lectura</p>
+            <p id="inventory-time" class="panel-value">Todavia no ejecutado</p>
+          </div>
+          <div>
+            <p class="panel-label">Cartas detectadas</p>
+            <p id="inventory-total" class="panel-value">0</p>
+          </div>
+        </div>
       </section>
 
       <section id="error-banner" class="error-banner hidden"></section>
+
+      <section class="panel selector-panel">
+        <div class="table-header">
+          <div>
+            <p class="panel-label">Seleccion</p>
+            <h2>Programas a escanear</h2>
+          </div>
+          <div class="selector-actions">
+            <button id="refresh-programs-button" class="ghost-button">Actualizar catalogo</button>
+            <button id="select-all-button" class="ghost-button">Seleccionar todo</button>
+            <button id="clear-selection-button" class="ghost-button">Limpiar</button>
+          </div>
+        </div>
+        <div id="program-selector" class="program-selector"></div>
+      </section>
 
       <section class="panel table-panel">
         <div class="table-header">
@@ -49,23 +119,7 @@
           </div>
         </div>
 
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Mision</th>
-                <th>Progreso</th>
-                <th>Avance</th>
-                <th>Sugerencia</th>
-              </tr>
-            </thead>
-            <tbody id="missions-body">
-              <tr class="empty-row">
-                <td colspan="4">Todavia no hay datos. Ejecuta un escaneo para ver resultados.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <div id="missions-groups" class="missions-groups"></div>
       </section>
     </main>
 

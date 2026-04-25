@@ -2,3 +2,7 @@ node_modules/
 .env
 playwright/.cache/
 npm-debug.log*
+.playwright-profile/
+auth_state.json
+scan_results.json
+inventory_results.json
