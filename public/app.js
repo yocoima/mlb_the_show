@@ -243,10 +243,8 @@ async function refreshProgramCatalog(forceRefresh = false) {
   const lastScanResponse = await fetch('/api/last-scan');
   const lastScanPayload = await lastScanResponse.json();
   programCatalog = payload.programs?.length ? payload.programs : lastScanPayload.catalogPrograms || [];
-
-  if (!selectedProgramUrls.size) {
-    selectedProgramUrls = new Set(programCatalog.map((program) => program.url));
-  }
+  const availableUrls = new Set(programCatalog.map((program) => program.url));
+  selectedProgramUrls = new Set(Array.from(selectedProgramUrls).filter((url) => availableUrls.has(url)));
 
   renderProgramSelector(programCatalog);
 }
@@ -264,9 +262,8 @@ function applyScanPayload(payload) {
 
   if (catalogPrograms.length) {
     programCatalog = catalogPrograms;
-    if (!selectedProgramUrls.size) {
-      selectedProgramUrls = new Set(programCatalog.map((program) => program.url));
-    }
+    const availableUrls = new Set(programCatalog.map((program) => program.url));
+    selectedProgramUrls = new Set(Array.from(selectedProgramUrls).filter((url) => availableUrls.has(url)));
     renderProgramSelector(programCatalog);
   }
 

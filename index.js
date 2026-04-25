@@ -871,9 +871,16 @@ function inferProgramIdentityFromUrlAndMissions(url, missions = []) {
     .map((mission) => `${mission.programTitle || ''} ${mission.name || ''} ${mission.description || ''} ${mission.objectiveGroup || ''}`)
     .join(' ');
 
-  const inningMatch = missionText.match(/\b(\d+(?:st|nd|rd|th))\s+inning\b/i);
-  if (inningMatch) {
-    const inningLabel = `${inningMatch[1]} Inning XP Path`;
+  const inningMatches = Array.from(missionText.matchAll(/\b(\d+)(st|nd|rd|th)\s+inning\b/gi))
+    .map((match) => ({
+      number: Number(match[1]),
+      suffix: match[2].toLowerCase(),
+    }))
+    .filter((match) => Number.isFinite(match.number));
+
+  if (inningMatches.length) {
+    const highestInning = inningMatches.reduce((best, current) => (current.number > best.number ? current : best));
+    const inningLabel = `${highestInning.number}${highestInning.suffix} Inning XP Path`;
     return {
       title: inningLabel,
       topGroup: inningLabel,
@@ -881,9 +888,13 @@ function inferProgramIdentityFromUrlAndMissions(url, missions = []) {
     };
   }
 
-  const multiplayerMatch = missionText.match(/\bmultiplayer\s+(\d+)\b/i);
-  if (multiplayerMatch) {
-    const title = `Multiplayer ${multiplayerMatch[1]} Program`;
+  const multiplayerMatches = Array.from(missionText.matchAll(/\bmultiplayer\s+(\d+)\b/gi))
+    .map((match) => Number(match[1]))
+    .filter((value) => Number.isFinite(value));
+
+  if (multiplayerMatches.length) {
+    const highestMultiplayer = Math.max(...multiplayerMatches);
+    const title = `Multiplayer ${highestMultiplayer} Program`;
     return {
       title,
       topGroup: 'Multiplayer Program',
