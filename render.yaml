@@ -2,9 +2,16 @@ services:
   - type: web
     name: mlb-the-show-26-scanner
     runtime: node
-    plan: free
+    plan: starter
     buildCommand: npm install && npx playwright install --with-deps chromium
     startCommand: npm start
+    healthCheckPath: /api/health
+    disk:
+      name: data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
+      - key: DATA_DIR
+        value: /opt/render/project/src/data

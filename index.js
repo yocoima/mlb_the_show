@@ -8,9 +8,10 @@ const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 const LOGIN_TIMEOUT_MS = Number(process.env.LOGIN_TIMEOUT_MS) || (isProduction ? 60000 : 300000);
 const USER_DATA_DIR = path.join(__dirname, '.playwright-profile');
-const AUTH_STATE_FILE = path.join(__dirname, 'auth_state.json');
-const SCAN_RESULTS_FILE = path.join(__dirname, 'scan_results.json');
-const INVENTORY_RESULTS_FILE = path.join(__dirname, 'inventory_results.json');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const AUTH_STATE_FILE = path.join(DATA_DIR, 'auth_state.json');
+const SCAN_RESULTS_FILE = path.join(DATA_DIR, 'scan_results.json');
+const INVENTORY_RESULTS_FILE = path.join(DATA_DIR, 'inventory_results.json');
 const LOCAL_BROWSER_CHANNEL = process.env.PLAYWRIGHT_BROWSER_CHANNEL || 'chrome';
 const AUTH_CHECK_URL = 'https://mlb26.theshow.com/dashboard';
 const PROGRAMS_URL = 'https://mlb26.theshow.com/programs';
@@ -27,6 +28,8 @@ const scanState = {
   active: false,
   cancelRequested: false,
 };
+
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
