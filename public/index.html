@@ -22,12 +22,49 @@
           luego reutilizala para escanear programas desde cualquier dispositivo.
         </p>
 
-        <div class="actions">
-          <button id="import-button" class="secondary-button">Importar sesion</button>
-          <button id="scan-button" class="primary-button">Escanear programas</button>
-          <button id="cancel-scan-button" class="ghost-button">Detener escaneo</button>
-          <button id="reset-button" class="ghost-button">Reiniciar sesion</button>
-          <span id="status" class="status">Listo para iniciar.</span>
+        <div class="workflow-grid">
+          <article class="workflow-step">
+            <p class="workflow-step-number">Paso 1</p>
+            <h2>Importar sesion</h2>
+            <p class="workflow-copy">Pega tus cookies una sola vez para crear la sesion reutilizable.</p>
+            <div class="workflow-actions">
+              <button id="import-button" class="secondary-button">Importar sesion</button>
+              <button id="reset-button" class="ghost-button">Reiniciar sesion</button>
+            </div>
+          </article>
+
+          <article class="workflow-step">
+            <p class="workflow-step-number">Paso 2</p>
+            <h2>Descubrir contenido</h2>
+            <p class="workflow-copy">Actualiza el catalogo cuando MLB agregue programas nuevos o cambien los nombres.</p>
+            <div class="workflow-actions">
+              <button id="refresh-programs-button" class="ghost-button">Actualizar catalogo</button>
+              <button id="scan-inventory-button" class="secondary-button">Escanear inventario</button>
+            </div>
+          </article>
+
+          <article class="workflow-step">
+            <p class="workflow-step-number">Paso 3</p>
+            <h2>Escanear objetivos</h2>
+            <p class="workflow-copy">Marca los programas que te interesan y lee sus misiones, progreso y cartas sugeridas.</p>
+            <div class="workflow-actions">
+              <button id="scan-button" class="primary-button">Escanear programas</button>
+              <button id="cancel-scan-button" class="ghost-button">Detener escaneo</button>
+            </div>
+          </article>
+        </div>
+
+        <div class="scan-status-panel">
+          <div class="scan-status-copy">
+            <strong id="status">Listo para iniciar.</strong>
+            <p id="scan-detail" class="scan-detail">Todavia no hay un escaneo en progreso.</p>
+          </div>
+          <div class="scan-progress-meta">
+            <span id="scan-progress-label" class="scan-progress-label">0%</span>
+          </div>
+        </div>
+        <div class="scan-progress-track" aria-hidden="true">
+          <span id="scan-progress-bar"></span>
         </div>
       </section>
 
@@ -73,15 +110,18 @@
       </section>
 
       <section class="panel inventory-panel">
-        <div class="table-header">
-          <div>
-            <p class="panel-label">Inventario</p>
-            <h2>Cartas disponibles</h2>
-          </div>
-          <div class="selector-actions">
-            <button id="scan-inventory-button" class="secondary-button">Escanear inventario</button>
-          </div>
+      <div class="table-header">
+        <div>
+          <p class="panel-label">Inventario</p>
+          <h2>Cartas disponibles</h2>
+          <p class="panel-help">
+            Escanea tu inventario para detectar las cartas que tienes y poder recomendarlas luego en las misiones.
+          </p>
         </div>
+        <div class="selector-actions">
+          <button id="scan-inventory-button" class="secondary-button">Escanear inventario</button>
+        </div>
+      </div>
         <div class="inventory-summary">
           <div>
             <p class="panel-label">Ultima lectura</p>
@@ -103,7 +143,6 @@
             <h2>Programas a escanear</h2>
           </div>
           <div class="selector-actions">
-            <button id="refresh-programs-button" class="ghost-button">Actualizar catalogo</button>
             <button id="select-all-button" class="ghost-button">Seleccionar todo</button>
             <button id="clear-selection-button" class="ghost-button">Limpiar</button>
           </div>

@@ -8,6 +8,9 @@ const selectAllButton = document.getElementById('select-all-button');
 const clearSelectionButton = document.getElementById('clear-selection-button');
 const sessionInput = document.getElementById('session-input');
 const statusNode = document.getElementById('status');
+const scanDetailNode = document.getElementById('scan-detail');
+const scanProgressLabelNode = document.getElementById('scan-progress-label');
+const scanProgressBarNode = document.getElementById('scan-progress-bar');
 const errorBanner = document.getElementById('error-banner');
 const scanTimeNode = document.getElementById('scan-time');
 const missionTotalNode = document.getElementById('mission-total');
@@ -21,6 +24,9 @@ const missionsGroupsNode = document.getElementById('missions-groups');
 let programCatalog = [];
 let selectedProgramUrls = new Set();
 let inventoryPayload = { scannedAt: null, total: 0, cards: [] };
+let scanStatusTimer = null;
+let groupedCatalogCache = [];
+let groupedMissionCache = [];
 cancelScanButton.disabled = true;
 
 bootstrap();
@@ -33,6 +39,7 @@ importButton.addEventListener('click', async () => {
   setBusyState(true);
   hideError();
   statusNode.textContent = 'Importando la sesion pegada en auth_state.json...';
+  scanDetailNode.textContent = 'Guardando cookies en auth_state.json...';
 
   try {
     const response = await fetch('/api/import-session', {
@@ -60,6 +67,8 @@ scanButton.addEventListener('click', async () => {
   setBusyState(true);
   hideError();
   statusNode.textContent = 'Reutilizando la sesion guardada y escaneando programas...';
+  scanDetailNode.textContent = 'Preparando el escaneo de programas seleccionados...';
+  startScanStatusPolling();
 
   try {
     const selectedPrograms = getSelectedProgramUrls();
@@ -93,8 +102,10 @@ scanButton.addEventListener('click', async () => {
   } catch (error) {
     showError(error.message);
     statusNode.textContent = 'El escaneo fallo.';
+    scanDetailNode.textContent = error.message;
     await refreshSessionStatus();
   } finally {
+    stopScanStatusPolling();
     setBusyState(false);
   }
 });
@@ -102,6 +113,7 @@ scanButton.addEventListener('click', async () => {
 cancelScanButton.addEventListener('click', async () => {
   hideError();
   statusNode.textContent = 'Solicitando detener el escaneo...';
+  scanDetailNode.textContent = 'Esperando que el backend termine el programa actual y se detenga.';
 
   try {
     const response = await fetch('/api/scan/cancel', { method: 'POST' });
@@ -122,6 +134,7 @@ resetButton.addEventListener('click', async () => {
   setBusyState(true);
   hideError();
   statusNode.textContent = 'Reiniciando la sesion local de Playwright...';
+  scanDetailNode.textContent = 'Borrando sesion local y manteniendo resultados guardados.';
 
   try {
     const response = await fetch('/api/reset-session', { method: 'POST' });
@@ -145,6 +158,7 @@ refreshProgramsButton.addEventListener('click', async () => {
   setBusyState(true);
   hideError();
   statusNode.textContent = 'Actualizando catalogo de programas...';
+  scanDetailNode.textContent = 'Descubriendo programas y grupos disponibles.';
 
   try {
     await refreshProgramCatalog(true);
@@ -161,6 +175,7 @@ scanInventoryButton.addEventListener('click', async () => {
   setBusyState(true);
   hideError();
   statusNode.textContent = 'Leyendo inventario de cartas...';
+  scanDetailNode.textContent = 'Recorriendo tu inventario y guardando cartas detectadas.';
 
   try {
     const response = await fetch('/api/inventory/scan', { method: 'POST' });
@@ -276,17 +291,53 @@ function renderProgramSelector(programs) {
     return;
   }
 
-  const grouped = groupCatalogPrograms(programs);
+  groupedCatalogCache = groupCatalogPrograms(programs);
 
-  programSelectorNode.innerHTML = grouped
-    .map((group) => `
-      <details class="selector-group">
+  programSelectorNode.innerHTML = groupedCatalogCache
+    .map((group, groupIndex) => `
+      <details class="selector-group" data-group-index="${groupIndex}">
         <summary class="selector-group-header">
           <h3>${escapeHtml(group.topGroup)}</h3>
         </summary>
-        ${group.subGroups.map((subGroup) => `
-          <details class="selector-subgroup">
-            <summary class="selector-subgroup-title">${escapeHtml(subGroup.name)}</summary>
+        <div class="selector-group-body"></div>
+      </details>
+    `)
+    .join('');
+
+  programSelectorNode.querySelectorAll('.selector-group').forEach((details) => {
+    details.addEventListener('toggle', () => {
+      if (!details.open) {
+        return;
+      }
+
+      const body = details.querySelector('.selector-group-body');
+      if (body.dataset.rendered === '1') {
+        return;
+      }
+
+      const group = groupedCatalogCache[Number(details.dataset.groupIndex)];
+      body.innerHTML = group.subGroups.map((subGroup, subGroupIndex) => `
+        <details class="selector-subgroup" data-group-index="${details.dataset.groupIndex}" data-subgroup-index="${subGroupIndex}">
+          <summary class="selector-subgroup-title">${escapeHtml(subGroup.name)}</summary>
+          <div class="selector-subgroup-body"></div>
+        </details>
+      `).join('');
+      body.dataset.rendered = '1';
+
+      body.querySelectorAll('.selector-subgroup').forEach((subDetails) => {
+        subDetails.addEventListener('toggle', () => {
+          if (!subDetails.open) {
+            return;
+          }
+
+          const subBody = subDetails.querySelector('.selector-subgroup-body');
+          if (subBody.dataset.rendered === '1') {
+            return;
+          }
+
+          const renderedGroup = groupedCatalogCache[Number(subDetails.dataset.groupIndex)];
+          const subGroup = renderedGroup.subGroups[Number(subDetails.dataset.subgroupIndex)];
+          subBody.innerHTML = `
             <div class="selector-grid">
               ${subGroup.programs.map((program) => `
                 <label class="program-option">
@@ -299,19 +350,20 @@ function renderProgramSelector(programs) {
                 </label>
               `).join('')}
             </div>
-          </details>
-        `).join('')}
-      </details>
-    `)
-    .join('');
+          `;
+          subBody.dataset.rendered = '1';
 
-  programSelectorNode.querySelectorAll('input[type="checkbox"]').forEach((input) => {
-    input.addEventListener('change', () => {
-      if (input.checked) {
-        selectedProgramUrls.add(input.value);
-      } else {
-        selectedProgramUrls.delete(input.value);
-      }
+          subBody.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+            input.addEventListener('change', () => {
+              if (input.checked) {
+                selectedProgramUrls.add(input.value);
+              } else {
+                selectedProgramUrls.delete(input.value);
+              }
+            });
+          });
+        });
+      });
     });
   });
 }
@@ -326,38 +378,127 @@ function renderMissionGroups(missions) {
     return;
   }
 
-  const grouped = groupMissionsHierarchy(missions);
+  groupedMissionCache = groupMissionsHierarchy(missions);
 
-  missionsGroupsNode.innerHTML = grouped
-    .map((topGroup) => `
-      <details class="result-top-group">
+  missionsGroupsNode.innerHTML = groupedMissionCache
+    .map((topGroup, topGroupIndex) => `
+      <details class="result-top-group" data-top-group-index="${topGroupIndex}">
         <summary class="result-top-group-header">
           <h3>${escapeHtml(topGroup.name)}</h3>
         </summary>
-        ${topGroup.subGroups.map((subGroup) => `
-          <details class="program-subgroup">
-            <summary class="program-subgroup-header">
-              <h4>${escapeHtml(subGroup.name)}</h4>
-            </summary>
-            ${subGroup.programs.map((program) => `
-              <details class="program-group">
-                <summary class="program-group-header">
-                  <div>
-                    <h3>${escapeHtml(program.programTitle)}</h3>
-                    <p>${program.missions.length} mision(es)</p>
-                  </div>
-                  <span class="status-badge ${program.status === 'updated' ? 'status-updated' : 'status-stale'}">
-                    ${program.status === 'updated' ? 'Actualizadas' : 'Sin actualizar'}
-                  </span>
-                </summary>
-                ${renderObjectiveGroups(program.missions)}
-              </details>
-            `).join('')}
-          </details>
-        `).join('')}
+        <div class="result-top-group-body"></div>
       </details>
     `)
     .join('');
+
+  missionsGroupsNode.querySelectorAll('.result-top-group').forEach((details) => {
+    details.addEventListener('toggle', () => {
+      if (!details.open) {
+        return;
+      }
+
+      const body = details.querySelector('.result-top-group-body');
+      if (body.dataset.rendered === '1') {
+        return;
+      }
+
+      const topGroup = groupedMissionCache[Number(details.dataset.topGroupIndex)];
+      body.innerHTML = topGroup.subGroups.map((subGroup, subGroupIndex) => `
+        <details class="program-subgroup" data-top-group-index="${details.dataset.topGroupIndex}" data-subgroup-index="${subGroupIndex}">
+          <summary class="program-subgroup-header">
+            <h4>${escapeHtml(subGroup.name)}</h4>
+          </summary>
+          <div class="program-subgroup-body"></div>
+        </details>
+      `).join('');
+      body.dataset.rendered = '1';
+
+      body.querySelectorAll('.program-subgroup').forEach((subDetails) => {
+        subDetails.addEventListener('toggle', () => {
+          if (!subDetails.open) {
+            return;
+          }
+
+          const subBody = subDetails.querySelector('.program-subgroup-body');
+          if (subBody.dataset.rendered === '1') {
+            return;
+          }
+
+          const renderedTopGroup = groupedMissionCache[Number(subDetails.dataset.topGroupIndex)];
+          const subGroup = renderedTopGroup.subGroups[Number(subDetails.dataset.subgroupIndex)];
+          subBody.innerHTML = subGroup.programs.map((program, programIndex) => `
+            <details class="program-group" data-top-group-index="${subDetails.dataset.topGroupIndex}" data-subgroup-index="${subDetails.dataset.subgroupIndex}" data-program-index="${programIndex}">
+              <summary class="program-group-header">
+                <div>
+                  <h3>${escapeHtml(program.programTitle)}</h3>
+                  <p>${program.missions.length} mision(es)</p>
+                </div>
+                <span class="status-badge ${program.status === 'updated' ? 'status-updated' : 'status-stale'}">
+                  ${program.status === 'updated' ? 'Actualizadas' : 'Sin actualizar'}
+                </span>
+              </summary>
+              <div class="program-group-body"></div>
+            </details>
+          `).join('');
+          subBody.dataset.rendered = '1';
+
+          subBody.querySelectorAll('.program-group').forEach((programDetails) => {
+            programDetails.addEventListener('toggle', () => {
+              if (!programDetails.open) {
+                return;
+              }
+
+              const programBody = programDetails.querySelector('.program-group-body');
+              if (programBody.dataset.rendered === '1') {
+                return;
+              }
+
+              const groupedTop = groupedMissionCache[Number(programDetails.dataset.topGroupIndex)];
+              const groupedSub = groupedTop.subGroups[Number(programDetails.dataset.subgroupIndex)];
+              const program = groupedSub.programs[Number(programDetails.dataset.programIndex)];
+              programBody.innerHTML = renderObjectiveGroups(program.missions);
+              programBody.dataset.rendered = '1';
+
+              programBody.querySelectorAll('.objective-group').forEach((objectiveDetails) => {
+                objectiveDetails.addEventListener('toggle', () => {
+                  if (!objectiveDetails.open) {
+                    return;
+                  }
+
+                  const objectiveBody = objectiveDetails.querySelector('.objective-group-body');
+                  if (objectiveBody.dataset.rendered === '1') {
+                    return;
+                  }
+
+                  const objectiveMissions = JSON.parse(objectiveDetails.dataset.missions);
+                  objectiveBody.innerHTML = `
+                    <div class="group-table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Mision</th>
+                            <th>Requisito</th>
+                            <th>Donde jugar</th>
+                            <th>Progreso</th>
+                            <th>Avance</th>
+                            <th>Sugerencia</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${objectiveMissions.map(renderMissionRow).join('')}
+                        </tbody>
+                      </table>
+                    </div>
+                  `;
+                  objectiveBody.dataset.rendered = '1';
+                });
+              });
+            });
+          });
+        });
+      });
+    });
+  });
 }
 
 function renderObjectiveGroups(missions) {
@@ -369,23 +510,7 @@ function renderObjectiveGroups(missions) {
         <strong>${escapeHtml(group.name)}</strong>
         <span>${group.missions.length} objetivo(s)</span>
       </summary>
-      <div class="group-table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Mision</th>
-              <th>Requisito</th>
-              <th>Donde jugar</th>
-              <th>Progreso</th>
-              <th>Avance</th>
-              <th>Sugerencia</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${group.missions.map(renderMissionRow).join('')}
-          </tbody>
-        </table>
-      </div>
+      <div class="objective-group-body" data-missions="${escapeHtml(JSON.stringify(group.missions))}"></div>
     </details>
   `).join('');
 }
@@ -572,6 +697,61 @@ function setBusyState(isLoading) {
     input.disabled = isLoading;
   });
   scanButton.textContent = isLoading ? 'Procesando...' : 'Escanear programas';
+}
+
+function startScanStatusPolling() {
+  stopScanStatusPolling();
+  updateScanProgress({ active: true, percent: 0, phase: 'starting', totalPrograms: 0, completedPrograms: 0, currentProgramTitle: '' });
+  scanStatusTimer = setInterval(refreshScanStatus, 1200);
+  refreshScanStatus();
+}
+
+function stopScanStatusPolling() {
+  if (scanStatusTimer) {
+    clearInterval(scanStatusTimer);
+    scanStatusTimer = null;
+  }
+}
+
+async function refreshScanStatus() {
+  try {
+    const response = await fetch('/api/scan/status');
+    const payload = await response.json();
+    updateScanProgress(payload);
+  } catch {
+    // Ignore transient polling errors while the main request is still running.
+  }
+}
+
+function updateScanProgress(payload) {
+  const percent = Number(payload?.percent) || 0;
+  scanProgressBarNode.style.width = `${percent}%`;
+  scanProgressLabelNode.textContent = `${percent}%`;
+
+  if (!payload?.active) {
+    if (!scanStatusTimer) {
+      scanDetailNode.textContent = 'Todavia no hay un escaneo en progreso.';
+      scanProgressBarNode.style.width = '0%';
+      scanProgressLabelNode.textContent = '0%';
+    }
+    return;
+  }
+
+  const phaseMap = {
+    'starting': 'Iniciando escaneo...',
+    'validating-session': 'Validando sesion guardada...',
+    'discovering-programs': 'Descubriendo programas y resolviendo nombres...',
+    'scanning-programs': 'Leyendo objetivos de los programas seleccionados...',
+    'finalizing-results': 'Guardando resultados y cruzando inventario...',
+  };
+
+  const phaseText = phaseMap[payload.phase] || 'Escaneando...';
+  const progressText = payload.totalPrograms
+    ? `${payload.completedPrograms || 0} de ${payload.totalPrograms} programas`
+    : 'Preparando lista de programas';
+  const currentText = payload.currentProgramTitle ? `Actual: ${payload.currentProgramTitle}` : '';
+
+  scanDetailNode.textContent = [phaseText, progressText, currentText].filter(Boolean).join(' · ');
 }
 
 function showError(message) {

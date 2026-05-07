@@ -27,6 +27,11 @@ let lastSonyRateLimitAt = 0;
 const scanState = {
   active: false,
   cancelRequested: false,
+  phase: 'idle',
+  totalPrograms: 0,
+  completedPrograms: 0,
+  currentProgramTitle: '',
+  startedAt: null,
 };
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -281,6 +286,23 @@ app.post('/api/scan/cancel', (req, res) => {
   });
 });
 
+app.get('/api/scan/status', (req, res) => {
+  const total = Number(scanState.totalPrograms) || 0;
+  const completed = Number(scanState.completedPrograms) || 0;
+  const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+
+  res.json({
+    active: scanState.active,
+    cancelRequested: scanState.cancelRequested,
+    phase: scanState.phase,
+    totalPrograms: total,
+    completedPrograms: completed,
+    currentProgramTitle: scanState.currentProgramTitle || '',
+    startedAt: scanState.startedAt,
+    percent,
+  });
+});
+
 app.post('/api/inventory/scan', async (req, res) => {
   let browser;
   let context;
@@ -354,6 +376,11 @@ async function handleScanRequest(selectedPrograms, res) {
 
     scanState.active = true;
     scanState.cancelRequested = false;
+    scanState.phase = 'validating-session';
+    scanState.totalPrograms = 0;
+    scanState.completedPrograms = 0;
+    scanState.currentProgramTitle = '';
+    scanState.startedAt = new Date().toISOString();
 
     browser = await launchBrowser();
     context = await browser.newContext({
@@ -380,6 +407,7 @@ async function handleScanRequest(selectedPrograms, res) {
       timeout: 60000,
     });
     await persistAuthState(context);
+    scanState.phase = 'discovering-programs';
 
     const previousResults = normalizeUntitledPrograms(readScanResults());
     const selectedSet = new Set(selectedPrograms);
@@ -408,6 +436,9 @@ async function handleScanRequest(selectedPrograms, res) {
     }
 
     const programLinks = targetPrograms.map((program) => program.url);
+    scanState.totalPrograms = programLinks.length;
+    scanState.completedPrograms = 0;
+    scanState.phase = 'scanning-programs';
 
     if (!programLinks.length) {
       throw new Error('Se abrio /programs, pero no se encontraron enlaces visitables de programas.');
@@ -427,8 +458,10 @@ async function handleScanRequest(selectedPrograms, res) {
 
       try {
         const programMeta = targetPrograms.find((program) => program.url === link) || { url: link };
+        scanState.currentProgramTitle = programMeta.title || link;
         const result = await scanProgramPage(context, programMeta, seenProgramUrls);
         visitedLinks.push(link);
+        scanState.completedPrograms = visitedLinks.length;
         await persistAuthState(context);
 
         if (result.programTitle && result.programTitle !== 'Programa sin titulo') {
@@ -459,6 +492,7 @@ async function handleScanRequest(selectedPrograms, res) {
     }
 
     const dedupedMissions = dedupeMissions(missions);
+    scanState.phase = 'finalizing-results';
     const scanResults = normalizeUntitledPrograms(buildPersistedScanResults({
       previous: readScanResults(),
       scannedMissions: dedupedMissions,
@@ -490,6 +524,11 @@ async function handleScanRequest(selectedPrograms, res) {
   } finally {
     scanState.active = false;
     scanState.cancelRequested = false;
+    scanState.phase = 'idle';
+    scanState.totalPrograms = 0;
+    scanState.completedPrograms = 0;
+    scanState.currentProgramTitle = '';
+    scanState.startedAt = null;
 
     if (context) {
       await context.close();
@@ -1019,20 +1058,30 @@ async function extractProgramTitle(page) {
       return breadcrumb[breadcrumb.length - 1];
     }
 
+    const bodyText = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    const inningMatches = Array.from(bodyText.matchAll(/\b(\d+)(st|nd|rd|th)\s+Inning XP Path\b/gi))
+      .map((match) => ({
+        number: Number(match[1]),
+        suffix: match[2].toLowerCase(),
+      }))
+      .filter((match) => Number.isFinite(match.number));
+
+    if (inningMatches.length) {
+      const highestInning = inningMatches.reduce((best, current) => (current.number > best.number ? current : best));
+      return `${highestInning.number}${highestInning.suffix} Inning XP Path`;
+    }
+
+    const multiplayerMatches = Array.from(bodyText.matchAll(/\bMultiplayer\s+(\d+)\s+Program\b/gi))
+      .map((match) => Number(match[1]))
+      .filter((value) => Number.isFinite(value));
+
+    if (multiplayerMatches.length) {
+      return `Multiplayer ${Math.max(...multiplayerMatches)} Program`;
+    }
+
     const pageTitle = (document.title || '').replace(/\s+-\s+The Show MLB 26.*$/i, '').replace(/\s+/g, ' ').trim();
     if (pageTitle) {
       return pageTitle;
-    }
-
-    const bodyText = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
-    const inningMatch = bodyText.match(/\b\d+(?:st|nd|rd|th)\s+Inning XP Path\b/i);
-    if (inningMatch) {
-      return inningMatch[0];
-    }
-
-    const multiplayerMatch = bodyText.match(/\bMultiplayer\s+\d+\s+Program\b/i);
-    if (multiplayerMatch) {
-      return multiplayerMatch[0];
     }
 
     return 'Programa sin titulo';

@@ -88,6 +88,104 @@ body::before {
   margin-top: 28px;
 }
 
+.workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 28px;
+}
+
+.workflow-step {
+  padding: 18px 18px 20px;
+  border: 1px solid rgba(158, 178, 207, 0.12);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.workflow-step-number {
+  margin: 0 0 8px;
+  color: var(--primary);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.workflow-step h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.workflow-copy {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.96rem;
+  line-height: 1.45;
+}
+
+.workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.scan-status-panel {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+  margin-top: 18px;
+}
+
+.scan-status-copy {
+  min-width: 0;
+}
+
+.scan-status-copy strong {
+  display: block;
+  font-size: 1rem;
+}
+
+.scan-detail {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.scan-progress-meta {
+  flex-shrink: 0;
+}
+
+.scan-progress-label {
+  display: inline-flex;
+  min-width: 56px;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(77, 182, 255, 0.14);
+  color: var(--text);
+  font-weight: 800;
+}
+
+.scan-progress-track {
+  margin-top: 14px;
+  width: 100%;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.scan-progress-track span {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #74e2a8, #4db6ff);
+  transition: width 200ms ease;
+}
+
 .primary-button {
   border: 0;
   border-radius: 999px;
@@ -169,6 +267,14 @@ body::before {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
   padding: 0 28px 24px;
+}
+
+.panel-help {
+  max-width: 40rem;
+  margin: 8px 0 0;
+  color: rgba(215, 228, 255, 0.72);
+  font-size: 0.95rem;
+  line-height: 1.45;
 }
 
 .panel-value {
@@ -610,6 +716,14 @@ td {
 
   .inventory-summary {
     grid-template-columns: 1fr;
+  }
+
+  .workflow-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .scan-status-panel {
+    flex-direction: column;
   }
 
   .progress-cell {
