@@ -25,6 +25,7 @@ let programCatalog = [];
 let selectedProgramUrls = new Set();
 let inventoryPayload = { scannedAt: null, total: 0, cards: [] };
 let scanStatusTimer = null;
+let inventoryStatusTimer = null;
 let groupedCatalogCache = [];
 let groupedMissionCache = [];
 cancelScanButton.disabled = true;
@@ -199,7 +200,7 @@ scanInventoryButton.addEventListener('click', async () => {
   setBusyState(true);
   hideError();
   statusNode.textContent = 'Leyendo inventario de cartas...';
-  scanDetailNode.textContent = 'Recorriendo tu inventario y guardando cartas detectadas.';
+  startInventoryStatusPolling();
 
   try {
     const response = await apiFetch('/api/inventory/scan', { method: 'POST' });
@@ -217,6 +218,7 @@ scanInventoryButton.addEventListener('click', async () => {
     showError(error.message);
     statusNode.textContent = 'No se pudo leer el inventario.';
   } finally {
+    stopInventoryStatusPolling();
     setBusyState(false);
   }
 });
@@ -763,6 +765,36 @@ function stopScanStatusPolling() {
   scanProgressBarNode.parentElement.classList.remove('indeterminate');
   scanProgressBarNode.style.width = '0%';
   scanProgressLabelNode.textContent = '0%';
+}
+
+function startInventoryStatusPolling() {
+  stopInventoryStatusPolling();
+  const track = scanProgressBarNode.parentElement;
+  track.classList.add('indeterminate');
+  scanProgressLabelNode.textContent = '...';
+  scanDetailNode.textContent = 'Iniciando escaneo de inventario...';
+  inventoryStatusTimer = setInterval(refreshInventoryStatus, 1500);
+}
+
+function stopInventoryStatusPolling() {
+  if (inventoryStatusTimer) {
+    clearInterval(inventoryStatusTimer);
+    inventoryStatusTimer = null;
+  }
+  scanProgressBarNode.parentElement.classList.remove('indeterminate');
+  scanProgressBarNode.style.width = '0%';
+  scanProgressLabelNode.textContent = '0%';
+}
+
+async function refreshInventoryStatus() {
+  try {
+    const response = await apiFetch('/api/inventory/scan-status');
+    const payload = await response.json();
+    if (!payload?.active) return;
+    scanDetailNode.textContent = `Leyendo inventario · Pagina ${payload.pagesScanned} · ${payload.cardsFound} cartas encontradas`;
+  } catch {
+    // Ignore transient polling errors.
+  }
 }
 
 async function refreshScanStatus() {

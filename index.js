@@ -22,6 +22,14 @@ const PROGRAM_DISCOVERY_PATTERNS = [
 ];
 let lastSonyRateLimitAt = 0;
 const scanStates = new Map();
+const inventoryScanStates = new Map();
+
+function getInventoryScanState(userId) {
+  if (!inventoryScanStates.has(userId)) {
+    inventoryScanStates.set(userId, { active: false, pagesScanned: 0, cardsFound: 0 });
+  }
+  return inventoryScanStates.get(userId);
+}
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -376,6 +384,13 @@ app.get('/api/scan/status', (req, res) => {
   });
 });
 
+app.get('/api/inventory/scan-status', (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const state = getInventoryScanState(userId);
+  res.json(state);
+});
+
 app.post('/api/inventory/scan', async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
@@ -396,8 +411,32 @@ app.post('/api/inventory/scan', async (req, res) => {
       storageState: getAuthStateFile(userId),
     });
 
+    const invState = getInventoryScanState(userId);
+    invState.active = true;
+    invState.pagesScanned = 0;
+    invState.cardsFound = 0;
+
     const page = await context.newPage();
-    const cards = await scanFullInventory(context, page);
+
+    await page.goto(AUTH_CHECK_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    });
+
+    if (!isAuthenticatedMlbUrl(page.url())) {
+      fs.rmSync(getAuthStateFile(userId), { force: true });
+      invState.active = false;
+      return res.status(401).json({
+        error: 'La sesion persistida vencio.',
+        detail: 'auth_state.json ya no es valido. Debes reimportar las cookies.',
+      });
+    }
+
+    const cards = await scanFullInventory(context, page, (pagesScanned, cardsFound) => {
+      invState.pagesScanned = pagesScanned;
+      invState.cardsFound = cardsFound;
+    });
+    invState.active = false;
     const results = {
       scannedAt: new Date().toISOString(),
       total: cards.length,
@@ -408,11 +447,22 @@ app.post('/api/inventory/scan', async (req, res) => {
     await persistAuthState(context, userId);
     return res.json(results);
   } catch (error) {
+    console.error('[inventory/scan] Error:', error.message);
+    getInventoryScanState(userId).active = false;
+    const expired = isSessionExpiredError(error);
+    if (expired) {
+      fs.rmSync(getAuthStateFile(userId), { force: true });
+      return res.status(401).json({
+        error: 'La sesion expiro durante el escaneo del inventario.',
+        detail: 'Reimporta las cookies y vuelve a intentarlo.',
+      });
+    }
     return res.status(500).json({
       error: 'No se pudo leer el inventario.',
       detail: buildUserFacingError(error),
     });
   } finally {
+    getInventoryScanState(userId).active = false;
     if (context) {
       await context.close();
     }
@@ -1285,7 +1335,7 @@ async function hydrateMissingProgramTitles(context, programs) {
   return hydrated;
 }
 
-async function scanFullInventory(context, page) {
+async function scanFullInventory(context, page, onProgress) {
   const cards = [];
   const seenPages = new Set();
   const seenCards = new Set();
@@ -1313,6 +1363,7 @@ async function scanFullInventory(context, page) {
       cards.push(card);
     }
 
+    if (onProgress) onProgress(seenPages.size, cards.length);
     nextUrl = await extractNextInventoryPageUrl(page);
   }
 
