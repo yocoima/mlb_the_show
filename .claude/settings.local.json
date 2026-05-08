@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\yhs\\\\OneDrive - Cuanta\\\\Documentos\\\\Personales\\\\programacion\\\\mlb\" -Recurse -Force | ForEach-Object { $_.FullName } | Sort-Object)",
+      "Bash(Find \"c:\\\\Users\\\\yhs\\\\OneDrive - Cuanta\\\\Documentos\\\\Personales\\\\programacion\\\\mlb\" -type f -name \"*.json\" ! -path \"*/node_modules/*\" -o -type f -name \"*.js\" ! -path \"*/node_modules/*\")"
+    ]
+  }
+}

@@ -9,9 +9,6 @@ const isProduction = process.env.NODE_ENV === 'production';
 const LOGIN_TIMEOUT_MS = Number(process.env.LOGIN_TIMEOUT_MS) || (isProduction ? 60000 : 300000);
 const USER_DATA_DIR = path.join(__dirname, '.playwright-profile');
 const DATA_DIR = process.env.DATA_DIR || __dirname;
-const AUTH_STATE_FILE = path.join(DATA_DIR, 'auth_state.json');
-const SCAN_RESULTS_FILE = path.join(DATA_DIR, 'scan_results.json');
-const INVENTORY_RESULTS_FILE = path.join(DATA_DIR, 'inventory_results.json');
 const LOCAL_BROWSER_CHANNEL = process.env.PLAYWRIGHT_BROWSER_CHANNEL || 'chrome';
 const AUTH_CHECK_URL = 'https://mlb26.theshow.com/dashboard';
 const PROGRAMS_URL = 'https://mlb26.theshow.com/programs';
@@ -24,17 +21,59 @@ const PROGRAM_DISCOVERY_PATTERNS = [
   '/programs/other_programs',
 ];
 let lastSonyRateLimitAt = 0;
-const scanState = {
-  active: false,
-  cancelRequested: false,
-  phase: 'idle',
-  totalPrograms: 0,
-  completedPrograms: 0,
-  currentProgramTitle: '',
-  startedAt: null,
-};
+const scanStates = new Map();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+
+function getUserDir(userId) {
+  return path.join(DATA_DIR, 'users', userId);
+}
+
+function getAuthStateFile(userId) {
+  return path.join(getUserDir(userId), 'auth_state.json');
+}
+
+function getScanResultsFile(userId) {
+  return path.join(getUserDir(userId), 'scan_results.json');
+}
+
+function getInventoryResultsFile(userId) {
+  return path.join(getUserDir(userId), 'inventory_results.json');
+}
+
+function ensureUserDir(userId) {
+  fs.mkdirSync(getUserDir(userId), { recursive: true });
+}
+
+function getScanState(userId) {
+  if (!scanStates.has(userId)) {
+    scanStates.set(userId, {
+      active: false,
+      cancelRequested: false,
+      phase: 'idle',
+      totalPrograms: 0,
+      completedPrograms: 0,
+      currentProgramTitle: '',
+      startedAt: null,
+    });
+  }
+  return scanStates.get(userId);
+}
+
+function getUserId(req) {
+  const token = `${req.headers['x-user-token'] || ''}`.trim();
+  return /^[a-zA-Z0-9_-]{2,50}$/.test(token) ? token.toLowerCase() : null;
+}
+
+function requireUserId(req, res) {
+  const userId = getUserId(req);
+  if (!userId) {
+    res.status(400).json({ error: 'Token de usuario requerido.', detail: 'Recarga la pagina para generar tu identificador unico.' });
+    return null;
+  }
+  ensureUserDir(userId);
+  return userId;
+}
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -48,9 +87,12 @@ app.get('/api/health', (req, res) => {
 });
 
 app.post('/api/reset-session', async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
   try {
     fs.rmSync(USER_DATA_DIR, { recursive: true, force: true });
-    fs.rmSync(AUTH_STATE_FILE, { force: true });
+    fs.rmSync(getAuthStateFile(userId), { force: true });
 
     res.json({
       ok: true,
@@ -65,8 +107,11 @@ app.post('/api/reset-session', async (req, res) => {
 });
 
 app.get('/api/last-scan', async (req, res) => {
-  const results = normalizeUntitledPrograms(readScanResults());
-  const inventory = readInventoryResults();
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
+  const results = normalizeUntitledPrograms(readScanResults(userId));
+  const inventory = readInventoryResults(userId);
   const enriched = attachInventorySuggestionsToScanResults(results, inventory);
   const cleanedCatalogPrograms = filterIgnoredPrograms(enriched.catalogPrograms).filter((program) => !isUntitledProgram(program));
   res.json({
@@ -77,10 +122,16 @@ app.get('/api/last-scan', async (req, res) => {
 });
 
 app.get('/api/inventory', async (req, res) => {
-  res.json(readInventoryResults());
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
+  res.json(readInventoryResults(userId));
 });
 
 app.post('/api/import-session', async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
   try {
     const raw = `${req.body?.raw || ''}`.trim();
 
@@ -93,12 +144,13 @@ app.post('/api/import-session', async (req, res) => {
 
     const parsed = JSON.parse(raw);
     const storageState = normalizeImportedSession(parsed);
+    const authFile = getAuthStateFile(userId);
 
-    fs.writeFileSync(AUTH_STATE_FILE, JSON.stringify(storageState, null, 2));
+    fs.writeFileSync(authFile, JSON.stringify(storageState, null, 2));
 
     res.json({
       ok: true,
-      authStatePath: AUTH_STATE_FILE,
+      authStatePath: authFile,
       cookieCount: storageState.cookies.length,
       message: 'La sesion importada fue guardada como auth_state.json.',
     });
@@ -111,10 +163,13 @@ app.post('/api/import-session', async (req, res) => {
 });
 
 app.get('/api/session-status', async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
   try {
-    const savedStateExists = hasSavedAuthState();
+    const savedStateExists = hasSavedAuthState(userId);
     const validation = savedStateExists
-      ? await validateSavedSession()
+      ? await validateSavedSession(userId)
       : {
           authenticated: false,
           currentUrl: null,
@@ -126,7 +181,7 @@ app.get('/api/session-status', async (req, res) => {
       currentUrl: validation.currentUrl,
       checkedAt: validation.checkedAt,
       hasSavedAuthState: savedStateExists,
-      authStatePath: AUTH_STATE_FILE,
+      suggestedUserId: validation.detectedUserId || null,
       rateLimited: isSonyRateLimited(),
       lastSonyRateLimitAt: lastSonyRateLimitAt || null,
     });
@@ -139,16 +194,19 @@ app.get('/api/session-status', async (req, res) => {
 });
 
 app.get('/api/programs/catalog', async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
   let browser;
   let context;
 
   try {
     const forceRefresh = req.query.refresh === '1';
-    const previousResults = normalizeUntitledPrograms(readScanResults());
+    const previousResults = normalizeUntitledPrograms(readScanResults(userId));
 
     const cachedPrograms = filterIgnoredPrograms(previousResults.catalogPrograms).filter((program) => !isUntitledProgram(program));
 
-    if (!forceRefresh && cachedPrograms.length && !cachedPrograms.some((program) => program.title === 'Programa sin titulo')) {
+    if (!forceRefresh) {
       return res.json({
         discoveredAt: previousResults.scannedAt || null,
         programs: cachedPrograms,
@@ -156,7 +214,7 @@ app.get('/api/programs/catalog', async (req, res) => {
       });
     }
 
-    if (!hasSavedAuthState()) {
+    if (!hasSavedAuthState(userId)) {
       return res.json({
         programs: [],
         discoveredAt: null,
@@ -165,7 +223,7 @@ app.get('/api/programs/catalog', async (req, res) => {
 
     browser = await launchBrowser();
     context = await browser.newContext({
-      storageState: AUTH_STATE_FILE,
+      storageState: getAuthStateFile(userId),
     });
 
     const page = await context.newPage();
@@ -205,6 +263,9 @@ app.get('/api/programs/catalog', async (req, res) => {
 });
 
 app.get('/api/open-login', async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
   let context;
 
   try {
@@ -236,13 +297,12 @@ app.get('/api/open-login', async (req, res) => {
       });
     }
 
-    await context.storageState({ path: AUTH_STATE_FILE });
+    await context.storageState({ path: getAuthStateFile(userId) });
 
     res.json({
       ok: true,
       authenticated: true,
       currentUrl: page.url(),
-      authStatePath: AUTH_STATE_FILE,
       message: 'Sesion lista. auth_state.json fue guardado y ya puedes ejecutar el escaneo sin volver a loguearte.',
     });
   } catch (error) {
@@ -258,19 +318,28 @@ app.get('/api/open-login', async (req, res) => {
 });
 
 app.get('/api/scan', async (req, res) => {
-  return handleScanRequest([], res);
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  return handleScanRequest([], res, userId);
 });
 
 app.post('/api/scan', async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
   const selectedPrograms = Array.isArray(req.body?.selectedPrograms)
     ? req.body.selectedPrograms.filter(Boolean)
     : [];
 
-  return handleScanRequest(selectedPrograms, res);
+  return handleScanRequest(selectedPrograms, res, userId);
 });
 
 app.post('/api/scan/cancel', (req, res) => {
-  if (!scanState.active) {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
+  const state = getScanState(userId);
+  if (!state.active) {
     return res.json({
       ok: true,
       cancelled: false,
@@ -278,7 +347,7 @@ app.post('/api/scan/cancel', (req, res) => {
     });
   }
 
-  scanState.cancelRequested = true;
+  state.cancelRequested = true;
   return res.json({
     ok: true,
     cancelled: true,
@@ -287,28 +356,35 @@ app.post('/api/scan/cancel', (req, res) => {
 });
 
 app.get('/api/scan/status', (req, res) => {
-  const total = Number(scanState.totalPrograms) || 0;
-  const completed = Number(scanState.completedPrograms) || 0;
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
+  const state = getScanState(userId);
+  const total = Number(state.totalPrograms) || 0;
+  const completed = Number(state.completedPrograms) || 0;
   const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
 
   res.json({
-    active: scanState.active,
-    cancelRequested: scanState.cancelRequested,
-    phase: scanState.phase,
+    active: state.active,
+    cancelRequested: state.cancelRequested,
+    phase: state.phase,
     totalPrograms: total,
     completedPrograms: completed,
-    currentProgramTitle: scanState.currentProgramTitle || '',
-    startedAt: scanState.startedAt,
+    currentProgramTitle: state.currentProgramTitle || '',
+    startedAt: state.startedAt,
     percent,
   });
 });
 
 app.post('/api/inventory/scan', async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
   let browser;
   let context;
 
   try {
-    if (!hasSavedAuthState()) {
+    if (!hasSavedAuthState(userId)) {
       return res.status(400).json({
         error: 'No existe una sesion persistida.',
         detail: 'Primero importa o prepara una sesion valida.',
@@ -317,7 +393,7 @@ app.post('/api/inventory/scan', async (req, res) => {
 
     browser = await launchBrowser();
     context = await browser.newContext({
-      storageState: AUTH_STATE_FILE,
+      storageState: getAuthStateFile(userId),
     });
 
     const page = await context.newPage();
@@ -328,8 +404,8 @@ app.post('/api/inventory/scan', async (req, res) => {
       cards,
     };
 
-    writeInventoryResults(results);
-    await persistAuthState(context);
+    writeInventoryResults(userId, results);
+    await persistAuthState(context, userId);
     return res.json(results);
   } catch (error) {
     return res.status(500).json({
@@ -347,13 +423,14 @@ app.post('/api/inventory/scan', async (req, res) => {
   }
 });
 
-async function handleScanRequest(selectedPrograms, res) {
+async function handleScanRequest(selectedPrograms, res, userId) {
   let browser;
   let context;
   let scanCancelled = false;
+  const state = getScanState(userId);
 
   try {
-    if (scanState.active) {
+    if (state.active) {
       return res.status(409).json({
         error: 'Ya hay un escaneo en progreso.',
         detail: 'Espera a que termine o usa el boton Detener escaneo.',
@@ -367,24 +444,24 @@ async function handleScanRequest(selectedPrograms, res) {
       });
     }
 
-    if (!hasSavedAuthState()) {
+    if (!hasSavedAuthState(userId)) {
       return res.status(400).json({
         error: 'No existe una sesion persistida.',
         detail: 'Primero prepara una sesion valida desde PC para crear auth_state.json.',
       });
     }
 
-    scanState.active = true;
-    scanState.cancelRequested = false;
-    scanState.phase = 'validating-session';
-    scanState.totalPrograms = 0;
-    scanState.completedPrograms = 0;
-    scanState.currentProgramTitle = '';
-    scanState.startedAt = new Date().toISOString();
+    state.active = true;
+    state.cancelRequested = false;
+    state.phase = 'validating-session';
+    state.totalPrograms = 0;
+    state.completedPrograms = 0;
+    state.currentProgramTitle = '';
+    state.startedAt = new Date().toISOString();
 
     browser = await launchBrowser();
     context = await browser.newContext({
-      storageState: AUTH_STATE_FILE,
+      storageState: getAuthStateFile(userId),
     });
 
     const page = await context.newPage();
@@ -395,7 +472,7 @@ async function handleScanRequest(selectedPrograms, res) {
     });
 
     if (!isAuthenticatedMlbUrl(page.url())) {
-      fs.rmSync(AUTH_STATE_FILE, { force: true });
+      fs.rmSync(getAuthStateFile(userId), { force: true });
       return res.status(401).json({
         error: 'La sesion persistida vencio.',
         detail: 'auth_state.json ya no es valido. Debes renovar la sesion desde PC.',
@@ -406,10 +483,10 @@ async function handleScanRequest(selectedPrograms, res) {
       waitUntil: 'networkidle',
       timeout: 60000,
     });
-    await persistAuthState(context);
-    scanState.phase = 'discovering-programs';
+    await persistAuthState(context, userId);
+    state.phase = 'discovering-programs';
 
-    const previousResults = normalizeUntitledPrograms(readScanResults());
+    const previousResults = normalizeUntitledPrograms(readScanResults(userId));
     const selectedSet = new Set(selectedPrograms);
     let discovery = null;
     let catalogPrograms = filterIgnoredPrograms(previousResults.catalogPrograms);
@@ -436,9 +513,9 @@ async function handleScanRequest(selectedPrograms, res) {
     }
 
     const programLinks = targetPrograms.map((program) => program.url);
-    scanState.totalPrograms = programLinks.length;
-    scanState.completedPrograms = 0;
-    scanState.phase = 'scanning-programs';
+    state.totalPrograms = programLinks.length;
+    state.completedPrograms = 0;
+    state.phase = 'scanning-programs';
 
     if (!programLinks.length) {
       throw new Error('Se abrio /programs, pero no se encontraron enlaces visitables de programas.');
@@ -450,7 +527,7 @@ async function handleScanRequest(selectedPrograms, res) {
     let sessionExpired = false;
 
     for (const link of programLinks) {
-      if (scanState.cancelRequested) {
+      if (state.cancelRequested) {
         scanCancelled = true;
         skippedLinks.push({ url: link, reason: 'Escaneo cancelado por el usuario.' });
         break;
@@ -458,11 +535,11 @@ async function handleScanRequest(selectedPrograms, res) {
 
       try {
         const programMeta = targetPrograms.find((program) => program.url === link) || { url: link };
-        scanState.currentProgramTitle = programMeta.title || link;
+        state.currentProgramTitle = programMeta.title || link;
         const result = await scanProgramPage(context, programMeta, seenProgramUrls);
         visitedLinks.push(link);
-        scanState.completedPrograms = visitedLinks.length;
-        await persistAuthState(context);
+        state.completedPrograms = visitedLinks.length;
+        await persistAuthState(context, userId);
 
         if (result.programTitle && result.programTitle !== 'Programa sin titulo') {
           const targetProgram = targetPrograms.find((program) => program.url === link);
@@ -492,9 +569,9 @@ async function handleScanRequest(selectedPrograms, res) {
     }
 
     const dedupedMissions = dedupeMissions(missions);
-    scanState.phase = 'finalizing-results';
+    state.phase = 'finalizing-results';
     const scanResults = normalizeUntitledPrograms(buildPersistedScanResults({
-      previous: readScanResults(),
+      previous: readScanResults(userId),
       scannedMissions: dedupedMissions,
       scannedProgramUrls: visitedLinks,
       catalogPrograms,
@@ -513,8 +590,8 @@ async function handleScanRequest(selectedPrograms, res) {
       );
     }
 
-    writeScanResults(scanResults);
-    res.json(attachInventorySuggestionsToScanResults(scanResults, readInventoryResults()));
+    writeScanResults(userId, scanResults);
+    res.json(attachInventorySuggestionsToScanResults(scanResults, readInventoryResults(userId)));
   } catch (error) {
     console.error('Error en la automatizacion:', error);
     res.status(500).json({
@@ -522,13 +599,13 @@ async function handleScanRequest(selectedPrograms, res) {
       detail: buildUserFacingError(error),
     });
   } finally {
-    scanState.active = false;
-    scanState.cancelRequested = false;
-    scanState.phase = 'idle';
-    scanState.totalPrograms = 0;
-    scanState.completedPrograms = 0;
-    scanState.currentProgramTitle = '';
-    scanState.startedAt = null;
+    state.active = false;
+    state.cancelRequested = false;
+    state.phase = 'idle';
+    state.totalPrograms = 0;
+    state.completedPrograms = 0;
+    state.currentProgramTitle = '';
+    state.startedAt = null;
 
     if (context) {
       await context.close();
@@ -566,26 +643,112 @@ function processProgramData(data) {
     });
 }
 
+function generateStatHint(text) {
+  if (text.includes('home run') || text.includes('jonron') || text.includes('cuadrangular')) return 'Usa bateadores de alto poder';
+  if (text.includes('strikeout') || text.includes('ponche')) {
+    return (text.includes('abanicar') || text.includes('bateador')) ? 'Enfrentate a pitchers dominantes' : 'Usa pitchers con alto K/9';
+  }
+  if (text.includes('stolen base') || text.includes('base robada') || text.includes('robar')) return 'Usa corredores con alto Speed';
+  if (text.includes('rbi') || text.includes('carrera impulsada')) return 'Prioriza situaciones con corredores en base';
+  if (text.includes('doble') || text.includes('triple') || text.includes('extra base') || text.includes('extrabase')) return 'Usa bateadores con buen contacto';
+  if (text.includes(' hit') || text.includes('imparable') || text.includes('sencillo') || text.includes('single')) return 'Usa bateadores de alto contacto';
+  if (text.includes('victoria') || text.includes('ganar') || text.includes(' win')) return 'Optimiza tu lineup para consistencia';
+  if (text.includes('pxp') || text.includes('player xp') || text.includes('puntos de exp')) return 'Usa jugadores elegibles para acumular PxP';
+  if (text.includes('inning') || text.includes('entrada')) return 'Lanza partidos completos offline';
+  return null;
+}
+
+function generateModeHint(whereText) {
+  if (!whereText) return null;
+  const w = whereText.toLowerCase();
+  const modes = [];
+  if (w.includes('conquest')) modes.push('Conquest');
+  if (w.includes('mini seasons') || w.includes('mini-seasons')) modes.push('Mini Seasons');
+  if (w.includes('ranked')) modes.push('Ranked Seasons');
+  if (w.includes('events')) modes.push('Events');
+  if (w.includes('moments')) modes.push('Moments');
+  if (w.includes('showdown')) modes.push('Showdown');
+  if (w.includes('battle royale')) modes.push('Battle Royale');
+  if (w.includes('vs cpu') || w.includes('vs. cpu')) modes.push('vs. CPU');
+  if (!modes.length) return null;
+  const modeStr = modes.length === 1 ? modes[0] : `${modes.slice(0, -1).join(', ')} o ${modes[modes.length - 1]}`;
+  return `en ${modeStr}`;
+}
+
 function generateSuggestion(mission) {
-  const name = `${mission.name || ''}`.toLowerCase();
-
-  if (name.includes('pxp')) {
-    return 'Prioriza Conquest o Mini Seasons con jugadores elegibles.';
-  }
-
-  if (name.includes('home run') || name.includes('jonron')) {
-    return 'Busca estadios favorables al poder para acelerar la mision.';
-  }
-
-  if (name.includes('strikeout') || name.includes('ponche')) {
-    return 'Usa pitchers con alto K/9 en modos offline cortos.';
-  }
-
-  if (name.includes('hit') || name.includes('single') || name.includes('doble')) {
-    return 'Juega vs CPU en dificultad baja para farmear contacto rapido.';
-  }
-
+  const combined = `${mission.description || ''} ${mission.name || ''}`.toLowerCase();
+  const statHint = generateStatHint(combined);
+  const modeHint = generateModeHint(mission.whereToPlay);
+  if (statHint && modeHint) return `${statHint} ${modeHint}.`;
+  if (statHint) return `${statHint}.`;
+  if (modeHint) return `Avanza esta mision ${modeHint}.`;
   return 'Avanza esta mision en modos offline para progreso estable.';
+}
+
+function extractStatCategory(mission) {
+  const text = `${mission.description || ''} ${mission.name || ''}`.toLowerCase();
+  if (text.includes('home run') || text.includes('jonron') || text.includes('cuadrangular')) return 'hr';
+  if (text.includes('strikeout') || text.includes('ponche')) {
+    return (text.includes('abanicar') || text.includes('bateador')) ? 'k_batter' : 'k_pitcher';
+  }
+  if (text.includes('stolen base') || text.includes('base robada') || text.includes('robar')) return 'sb';
+  if (text.includes('rbi') || text.includes('carrera impulsada')) return 'rbi';
+  if (text.includes('doble') || text.includes('triple') || text.includes('extra base')) return 'xbh';
+  if (text.includes(' hit') || text.includes('imparable') || text.includes('sencillo') || text.includes('single')) return 'hits';
+  if (text.includes('victoria') || text.includes('ganar') || text.includes(' win')) return 'wins';
+  if (text.includes('pxp') || text.includes('player xp')) return 'pxp';
+  if (text.includes('inning') || text.includes('entrada')) return 'ip';
+  return null;
+}
+
+function extractModeSet(whereToPlay) {
+  const w = `${whereToPlay || ''}`.toLowerCase();
+  const modes = new Set();
+  if (w.includes('conquest')) modes.add('conquest');
+  if (w.includes('mini seasons') || w.includes('mini-seasons')) modes.add('mini_seasons');
+  if (w.includes('ranked')) modes.add('ranked');
+  if (w.includes('events')) modes.add('events');
+  if (w.includes('moments')) modes.add('moments');
+  if (w.includes('showdown')) modes.add('showdown');
+  if (w.includes('battle royale')) modes.add('battle_royale');
+  if (w.includes('vs cpu') || w.includes('vs. cpu')) modes.add('vs_cpu');
+  return modes;
+}
+
+function modesOverlap(setA, setB) {
+  if (!setA.size || !setB.size) return true;
+  for (const m of setA) if (setB.has(m)) return true;
+  return false;
+}
+
+function addCrossObjectiveHints(missions) {
+  const profiles = missions.map((m) => ({
+    mission: m,
+    statCategory: extractStatCategory(m),
+    modes: extractModeSet(m.whereToPlay),
+  }));
+
+  return profiles.map(({ mission, statCategory, modes }) => {
+    if (!statCategory) return { ...mission, crossProgramHints: [] };
+
+    const seen = new Set();
+    const hints = [];
+
+    for (const other of profiles) {
+      if (other.mission === mission) continue;
+      if (other.mission.programTitle === mission.programTitle) continue;
+      if (other.statCategory !== statCategory) continue;
+      if (!modesOverlap(modes, other.modes)) continue;
+
+      const key = `${other.mission.programTitle}||${other.mission.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      hints.push({ programTitle: other.mission.programTitle, missionName: other.mission.name });
+      if (hints.length >= 5) break;
+    }
+
+    return { ...mission, crossProgramHints: hints };
+  });
 }
 
 async function waitForAuthenticatedSession(page, timeoutMs) {
@@ -1520,26 +1683,25 @@ function attachInventorySuggestionsToScanResults(scanResults, inventoryResults) 
   const cards = Array.isArray(inventoryResults?.cards) ? inventoryResults.cards : [];
   const missions = Array.isArray(scanResults?.missions) ? scanResults.missions : [];
 
-  if (!cards.length || !missions.length) {
-    return {
-      ...scanResults,
-      inventory: inventoryResults || readInventoryResults(),
-    };
+  let enrichedMissions = missions;
+
+  if (cards.length && missions.length) {
+    enrichedMissions = missions.map((mission) => {
+      const recommendedCards = recommendCardsForMission(mission, cards, missions);
+      return {
+        ...mission,
+        recommendedCards: recommendedCards.cards,
+        comboMissionCount: recommendedCards.comboMissionCount,
+      };
+    });
   }
 
-  const enrichedMissions = missions.map((mission) => {
-    const recommendedCards = recommendCardsForMission(mission, cards, missions);
-    return {
-      ...mission,
-      recommendedCards: recommendedCards.cards,
-      comboMissionCount: recommendedCards.comboMissionCount,
-    };
-  });
+  const finalMissions = enrichedMissions.length ? addCrossObjectiveHints(enrichedMissions) : enrichedMissions;
 
   return {
     ...scanResults,
-    inventory: inventoryResults,
-    missions: enrichedMissions,
+    inventory: inventoryResults || { scannedAt: null, total: 0, cards: [] },
+    missions: finalMissions,
   };
 }
 
@@ -1690,8 +1852,9 @@ function cardMatchesMission(card, filters) {
   return true;
 }
 
-function readScanResults() {
-  if (!fs.existsSync(SCAN_RESULTS_FILE)) {
+function readScanResults(userId) {
+  const file = getScanResultsFile(userId);
+  if (!fs.existsSync(file)) {
     return {
       scannedAt: null,
       total: 0,
@@ -1705,7 +1868,7 @@ function readScanResults() {
   }
 
   try {
-    return JSON.parse(fs.readFileSync(SCAN_RESULTS_FILE, 'utf8'));
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
     return {
       scannedAt: null,
@@ -1720,12 +1883,13 @@ function readScanResults() {
   }
 }
 
-function writeScanResults(results) {
-  fs.writeFileSync(SCAN_RESULTS_FILE, JSON.stringify(results, null, 2));
+function writeScanResults(userId, results) {
+  fs.writeFileSync(getScanResultsFile(userId), JSON.stringify(results, null, 2));
 }
 
-function readInventoryResults() {
-  if (!fs.existsSync(INVENTORY_RESULTS_FILE)) {
+function readInventoryResults(userId) {
+  const file = getInventoryResultsFile(userId);
+  if (!fs.existsSync(file)) {
     return {
       scannedAt: null,
       total: 0,
@@ -1734,7 +1898,7 @@ function readInventoryResults() {
   }
 
   try {
-    return JSON.parse(fs.readFileSync(INVENTORY_RESULTS_FILE, 'utf8'));
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
     return {
       scannedAt: null,
@@ -1744,8 +1908,8 @@ function readInventoryResults() {
   }
 }
 
-function writeInventoryResults(results) {
-  fs.writeFileSync(INVENTORY_RESULTS_FILE, JSON.stringify(results, null, 2));
+function writeInventoryResults(userId, results) {
+  fs.writeFileSync(getInventoryResultsFile(userId), JSON.stringify(results, null, 2));
 }
 
 function buildPersistedScanResults({ previous, scannedMissions, scannedProgramUrls, catalogPrograms, sessionExpired, skippedLinks, cancelled }) {
@@ -1843,8 +2007,8 @@ async function launchBrowser() {
   return chromium.launch(launchOptions);
 }
 
-function hasSavedAuthState() {
-  return fs.existsSync(AUTH_STATE_FILE);
+function hasSavedAuthState(userId) {
+  return fs.existsSync(getAuthStateFile(userId));
 }
 
 function normalizeImportedSession(parsed) {
@@ -1907,14 +2071,75 @@ function normalizeSameSite(value) {
   return 'Lax';
 }
 
-async function validateSavedSession() {
+function slugifyUsername(username) {
+  const slug = `${username || ''}`
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '_')
+    .replace(/_{2,}/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 50);
+  return slug.length >= 2 ? slug : null;
+}
+
+function migrateUserDir(fromUserId, toUserId) {
+  if (!fromUserId || !toUserId || fromUserId === toUserId) return;
+
+  const fromDir = getUserDir(fromUserId);
+  if (!fs.existsSync(fromDir)) return;
+
+  const toDir = getUserDir(toUserId);
+  fs.mkdirSync(toDir, { recursive: true });
+
+  for (const file of ['auth_state.json', 'scan_results.json', 'inventory_results.json']) {
+    const src = path.join(fromDir, file);
+    const dst = path.join(toDir, file);
+    if (fs.existsSync(src) && !fs.existsSync(dst)) {
+      fs.copyFileSync(src, dst);
+    }
+  }
+}
+
+async function extractMlbUsernameFromPage(page) {
+  return page.evaluate(() => {
+    const usernamePattern = /^[a-zA-Z0-9_-]{2,30}$/;
+
+    // Strategy 1: JSON data embedded in inline script tags
+    for (const script of Array.from(document.querySelectorAll('script:not([src])'))) {
+      const text = script.textContent || '';
+      const match = text.match(/"(?:username|display_name|psn_online_id|psn_id|handle|gamertag)"\s*:\s*"([^"]{2,30})"/i);
+      if (match?.[1] && usernamePattern.test(match[1])) return match[1];
+    }
+
+    // Strategy 2: DOM selectors where the username might be visible
+    const selectors = [
+      '[data-username]', '[data-user-name]', '[data-psn-id]',
+      '.username', '.user-name', '.display-name', '.profile-name',
+      '.psn-id', '.nav-username', '.header-username', '.account-name',
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const text = (
+        el.getAttribute('data-username') ||
+        el.getAttribute('data-user-name') ||
+        el.getAttribute('data-psn-id') ||
+        el.textContent || ''
+      ).replace(/\s+/g, ' ').trim();
+      if (text && usernamePattern.test(text)) return text;
+    }
+
+    return null;
+  });
+}
+
+async function validateSavedSession(userId) {
   let browser;
   let context;
 
   try {
     browser = await launchBrowser();
     context = await browser.newContext({
-      storageState: AUTH_STATE_FILE,
+      storageState: getAuthStateFile(userId),
     });
 
     const page = await context.newPage();
@@ -1925,17 +2150,24 @@ async function validateSavedSession() {
     });
 
     const authenticated = isAuthenticatedMlbUrl(page.url());
+    let detectedUserId = null;
 
     if (!authenticated) {
-      fs.rmSync(AUTH_STATE_FILE, { force: true });
+      fs.rmSync(getAuthStateFile(userId), { force: true });
     } else {
-      await persistAuthState(context);
+      await persistAuthState(context, userId);
+      const rawUsername = await extractMlbUsernameFromPage(page);
+      detectedUserId = slugifyUsername(rawUsername);
+      if (detectedUserId && detectedUserId !== userId) {
+        migrateUserDir(userId, detectedUserId);
+      }
     }
 
     return {
       authenticated,
       currentUrl: page.url(),
       checkedAt: new Date().toISOString(),
+      detectedUserId,
     };
   } finally {
     if (context) {
@@ -1971,12 +2203,12 @@ function buildUserFacingError(error) {
   return message;
 }
 
-async function persistAuthState(context) {
+async function persistAuthState(context, userId) {
   if (!context) {
     return;
   }
 
-  await context.storageState({ path: AUTH_STATE_FILE });
+  await context.storageState({ path: getAuthStateFile(userId) });
 }
 
 function ensureAuthenticatedPage(page) {

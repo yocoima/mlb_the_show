@@ -186,6 +186,18 @@ body::before {
   transition: width 200ms ease;
 }
 
+@keyframes scan-indeterminate {
+  0% { margin-left: -30%; }
+  100% { margin-left: 110%; }
+}
+
+.scan-progress-track.indeterminate > span {
+  width: 30%;
+  margin-left: -30%;
+  animation: scan-indeterminate 1.3s ease-in-out infinite;
+  transition: none;
+}
+
 .primary-button {
   border: 0;
   border-radius: 999px;
@@ -655,6 +667,50 @@ td {
   border: 1px solid rgba(77, 182, 255, 0.2);
   color: var(--text);
   font-size: 0.84rem;
+}
+
+.cross-program-hints {
+  margin-bottom: 0.75rem;
+}
+
+.cross-program-hints > strong {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.cross-hint-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cross-hint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(116, 226, 168, 0.1);
+  border: 1px solid rgba(116, 226, 168, 0.25);
+  font-size: 0.8rem;
+}
+
+.cross-hint-program {
+  font-weight: 700;
+  color: #74e2a8;
+}
+
+.cross-hint-sep {
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+.cross-hint-mission {
+  color: var(--text);
 }
 
 .suggestion-detail-row td {

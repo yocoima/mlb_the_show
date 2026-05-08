@@ -29,6 +29,25 @@ let groupedCatalogCache = [];
 let groupedMissionCache = [];
 cancelScanButton.disabled = true;
 
+function getUserToken() {
+  let token = localStorage.getItem('mlb_user_token');
+  if (!token || !/^[a-zA-Z0-9_-]{2,50}$/.test(token)) {
+    token = crypto.randomUUID();
+    localStorage.setItem('mlb_user_token', token);
+  }
+  return token;
+}
+
+async function apiFetch(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      'X-User-Token': getUserToken(),
+    },
+  });
+}
+
 bootstrap();
 
 async function bootstrap() {
@@ -42,7 +61,7 @@ importButton.addEventListener('click', async () => {
   scanDetailNode.textContent = 'Guardando cookies en auth_state.json...';
 
   try {
-    const response = await fetch('/api/import-session', {
+    const response = await apiFetch('/api/import-session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ raw: sessionInput.value }),
@@ -72,7 +91,7 @@ scanButton.addEventListener('click', async () => {
 
   try {
     const selectedPrograms = getSelectedProgramUrls();
-    const response = await fetch('/api/scan', {
+    const response = await apiFetch('/api/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ selectedPrograms }),
@@ -116,7 +135,7 @@ cancelScanButton.addEventListener('click', async () => {
   scanDetailNode.textContent = 'Esperando que el backend termine el programa actual y se detenga.';
 
   try {
-    const response = await fetch('/api/scan/cancel', { method: 'POST' });
+    const response = await apiFetch('/api/scan/cancel', { method: 'POST' });
     const payload = await response.json();
 
     if (!response.ok) {
@@ -137,7 +156,7 @@ resetButton.addEventListener('click', async () => {
   scanDetailNode.textContent = 'Borrando sesion local y manteniendo resultados guardados.';
 
   try {
-    const response = await fetch('/api/reset-session', { method: 'POST' });
+    const response = await apiFetch('/api/reset-session', { method: 'POST' });
     const payload = await response.json();
 
     if (!response.ok) {
@@ -178,7 +197,7 @@ scanInventoryButton.addEventListener('click', async () => {
   scanDetailNode.textContent = 'Recorriendo tu inventario y guardando cartas detectadas.';
 
   try {
-    const response = await fetch('/api/inventory/scan', { method: 'POST' });
+    const response = await apiFetch('/api/inventory/scan', { method: 'POST' });
     const payload = await response.json();
 
     if (!response.ok) {
@@ -212,13 +231,13 @@ clearSelectionButton.addEventListener('click', () => {
 });
 
 async function loadLastScan() {
-  const response = await fetch('/api/last-scan');
+  const response = await apiFetch('/api/last-scan');
   const payload = await response.json();
   applyScanPayload(payload);
 }
 
 async function loadInventory() {
-  const response = await fetch('/api/inventory');
+  const response = await apiFetch('/api/inventory');
   const payload = await response.json();
   inventoryPayload = payload;
   renderInventorySummary(payload);
@@ -226,11 +245,18 @@ async function loadInventory() {
 
 async function refreshSessionStatus() {
   try {
-    const response = await fetch('/api/session-status');
+    const response = await apiFetch('/api/session-status');
     const payload = await response.json();
 
     if (!response.ok) {
       throw new Error(payload.detail || payload.error || 'Error desconocido');
+    }
+
+    if (payload.suggestedUserId) {
+      const current = localStorage.getItem('mlb_user_token');
+      if (payload.suggestedUserId !== current) {
+        localStorage.setItem('mlb_user_token', payload.suggestedUserId);
+      }
     }
 
     if (!payload.hasSavedAuthState) {
@@ -248,14 +274,14 @@ async function refreshSessionStatus() {
 }
 
 async function refreshProgramCatalog(forceRefresh = false) {
-  const response = await fetch(`/api/programs/catalog${forceRefresh ? '?refresh=1' : ''}`);
+  const response = await apiFetch(`/api/programs/catalog${forceRefresh ? '?refresh=1' : ''}`);
   const payload = await response.json();
 
   if (!response.ok) {
     throw new Error(payload.detail || payload.error || 'Error desconocido');
   }
 
-  const lastScanResponse = await fetch('/api/last-scan');
+  const lastScanResponse = await apiFetch('/api/last-scan');
   const lastScanPayload = await lastScanResponse.json();
   programCatalog = payload.programs?.length ? payload.programs : lastScanPayload.catalogPrograms || [];
   const availableUrls = new Set(programCatalog.map((program) => program.url));
@@ -470,7 +496,7 @@ function renderMissionGroups(missions) {
                     return;
                   }
 
-                  const objectiveMissions = JSON.parse(objectiveDetails.dataset.missions);
+                  const objectiveMissions = JSON.parse(objectiveBody.dataset.missions);
                   objectiveBody.innerHTML = `
                     <div class="group-table-wrap">
                       <table>
@@ -541,15 +567,33 @@ function renderMissionRow(mission) {
   `;
 }
 
+function renderCrossProgramHints(mission) {
+  const hints = Array.isArray(mission.crossProgramHints) ? mission.crossProgramHints : [];
+  if (!hints.length) return '';
+  return `
+    <div class="cross-program-hints">
+      <strong>Avanza en paralelo:</strong>
+      <div class="cross-hint-list">
+        ${hints.map((h) => `
+          <span class="cross-hint-chip">
+            <span class="cross-hint-program">${escapeHtml(h.programTitle)}</span>
+            <span class="cross-hint-sep">›</span>
+            <span class="cross-hint-mission">${escapeHtml(h.missionName)}</span>
+          </span>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderSuggestionDetails(mission) {
   const cardsMarkup = renderCardSuggestions(mission);
-  if (!cardsMarkup) {
-    return '';
-  }
-
+  const crossHintsMarkup = renderCrossProgramHints(mission);
+  if (!cardsMarkup && !crossHintsMarkup) return '';
   return `
     <tr class="suggestion-detail-row">
       <td colspan="6">
+        ${crossHintsMarkup}
         ${cardsMarkup}
       </td>
     </tr>
@@ -711,11 +755,14 @@ function stopScanStatusPolling() {
     clearInterval(scanStatusTimer);
     scanStatusTimer = null;
   }
+  scanProgressBarNode.parentElement.classList.remove('indeterminate');
+  scanProgressBarNode.style.width = '0%';
+  scanProgressLabelNode.textContent = '0%';
 }
 
 async function refreshScanStatus() {
   try {
-    const response = await fetch('/api/scan/status');
+    const response = await apiFetch('/api/scan/status');
     const payload = await response.json();
     updateScanProgress(payload);
   } catch {
@@ -725,8 +772,17 @@ async function refreshScanStatus() {
 
 function updateScanProgress(payload) {
   const percent = Number(payload?.percent) || 0;
-  scanProgressBarNode.style.width = `${percent}%`;
-  scanProgressLabelNode.textContent = `${percent}%`;
+  const track = scanProgressBarNode.parentElement;
+  const isDiscovering = payload?.active && percent === 0;
+
+  if (isDiscovering) {
+    track.classList.add('indeterminate');
+    scanProgressLabelNode.textContent = '...';
+  } else {
+    track.classList.remove('indeterminate');
+    scanProgressBarNode.style.width = `${percent}%`;
+    scanProgressLabelNode.textContent = `${percent}%`;
+  }
 
   if (!payload?.active) {
     if (!scanStatusTimer) {
