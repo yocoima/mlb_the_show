@@ -32,7 +32,12 @@ cancelScanButton.disabled = true;
 function getUserToken() {
   let token = localStorage.getItem('mlb_user_token');
   if (!token || !/^[a-zA-Z0-9_-]{2,50}$/.test(token)) {
-    token = crypto.randomUUID();
+    token = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
     localStorage.setItem('mlb_user_token', token);
   }
   return token;
