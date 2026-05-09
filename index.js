@@ -193,35 +193,20 @@ app.post('/api/import-session', async (req, res) => {
   }
 });
 
-app.get('/api/session-status', async (req, res) => {
+app.get('/api/session-status', (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
 
-  try {
-    const savedStateExists = hasSavedAuthState(userId);
-    const validation = savedStateExists
-      ? await validateSavedSession(userId)
-      : {
-          authenticated: false,
-          currentUrl: null,
-          checkedAt: new Date().toISOString(),
-        };
-
-    res.json({
-      authenticated: validation.authenticated,
-      currentUrl: validation.currentUrl,
-      checkedAt: validation.checkedAt,
-      hasSavedAuthState: savedStateExists,
-      suggestedUserId: validation.detectedUserId || null,
-      rateLimited: isSonyRateLimited(),
-      lastSonyRateLimitAt: lastSonyRateLimitAt || null,
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'No se pudo comprobar la sesion.',
-      detail: buildUserFacingError(error),
-    });
-  }
+  const savedStateExists = hasSavedAuthState(userId);
+  res.json({
+    authenticated: savedStateExists,
+    currentUrl: null,
+    checkedAt: new Date().toISOString(),
+    hasSavedAuthState: savedStateExists,
+    suggestedUserId: null,
+    rateLimited: isSonyRateLimited(),
+    lastSonyRateLimitAt: lastSonyRateLimitAt || null,
+  });
 });
 
 app.get('/api/programs/catalog', (req, res) => {
