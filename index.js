@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -714,7 +715,7 @@ app.post('/api/ai-suggest', async (req, res) => {
   if (!apiKey) {
     return res.status(503).json({
       error: 'Servicio de IA no disponible.',
-      detail: 'La variable GROQ_API_KEY no esta configurada en el servidor. Agregala en Render → Settings → Environment Variables.',
+      detail: 'La variable GROQ_API_KEY no esta configurada en el servidor. Agregala en el archivo .env del proyecto.',
     });
   }
 
