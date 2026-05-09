@@ -4,6 +4,9 @@ const cancelScanButton = document.getElementById('cancel-scan-button');
 const resetButton = document.getElementById('reset-button');
 const refreshProgramsButton = document.getElementById('refresh-programs-button');
 const scanInventoryButton = document.getElementById('scan-inventory-button');
+const shareLinkButton = document.getElementById('share-link-button');
+const tokenDisplay = document.getElementById('token-display');
+const tokenApplyButton = document.getElementById('token-apply-button');
 const selectAllButton = document.getElementById('select-all-button');
 const clearSelectionButton = document.getElementById('clear-selection-button');
 const sessionInput = document.getElementById('session-input');
@@ -31,6 +34,14 @@ let groupedMissionCache = [];
 cancelScanButton.disabled = true;
 
 function getUserToken() {
+  const urlToken = new URLSearchParams(window.location.search).get('token');
+  if (urlToken && /^[a-zA-Z0-9_-]{2,50}$/.test(urlToken)) {
+    localStorage.setItem('mlb_user_token', urlToken);
+    const clean = new URL(window.location.href);
+    clean.searchParams.delete('token');
+    window.history.replaceState({}, '', clean.toString());
+  }
+
   let token = localStorage.getItem('mlb_user_token');
   if (!token || !/^[a-zA-Z0-9_-]{2,50}$/.test(token)) {
     token = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -179,6 +190,32 @@ resetButton.addEventListener('click', async () => {
   }
 });
 
+tokenDisplay.value = getUserToken();
+tokenDisplay.addEventListener('focus', () => tokenDisplay.select());
+
+tokenApplyButton.addEventListener('click', () => {
+  const val = tokenDisplay.value.trim();
+  if (!/^[a-zA-Z0-9_-]{2,50}$/.test(val)) {
+    alert('Token invalido. Solo letras, numeros, guiones y guiones bajos (2-50 caracteres).');
+    return;
+  }
+  localStorage.setItem('mlb_user_token', val);
+  window.location.reload();
+});
+
+shareLinkButton.addEventListener('click', () => {
+  const token = getUserToken();
+  const url = new URL(window.location.href);
+  url.searchParams.set('token', token);
+  navigator.clipboard.writeText(url.toString()).then(() => {
+    const original = shareLinkButton.textContent;
+    shareLinkButton.textContent = 'Enlace copiado!';
+    setTimeout(() => { shareLinkButton.textContent = original; }, 2000);
+  }).catch(() => {
+    prompt('Copia este enlace y abrelo en tu celular:', url.toString());
+  });
+});
+
 refreshProgramsButton.addEventListener('click', async () => {
   setBusyState(true);
   hideError();
@@ -263,6 +300,8 @@ async function refreshSessionStatus() {
       const current = localStorage.getItem('mlb_user_token');
       if (payload.suggestedUserId !== current) {
         localStorage.setItem('mlb_user_token', payload.suggestedUserId);
+        window.location.reload();
+        return;
       }
     }
 

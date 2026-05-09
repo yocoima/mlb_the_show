@@ -30,7 +30,16 @@
             <div class="workflow-actions">
               <button id="import-button" class="secondary-button">Importar sesion</button>
               <button id="reset-button" class="ghost-button">Reiniciar sesion</button>
+              <button id="share-link-button" class="ghost-button">Copiar enlace para celular</button>
             </div>
+            <details style="margin-top:0.75rem">
+              <summary style="cursor:pointer;font-size:0.85rem;color:var(--text-muted,#888)">Token de dispositivo</summary>
+              <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center;flex-wrap:wrap">
+                <input id="token-display" type="text" readonly style="flex:1;min-width:0;font-family:monospace;font-size:0.8rem" />
+                <button id="token-apply-button" class="ghost-button" style="white-space:nowrap">Usar este token</button>
+              </div>
+              <p style="font-size:0.78rem;color:var(--text-muted,#888);margin-top:0.4rem">Pega aqui el token del PC para sincronizar este dispositivo. O copia el tuyo para usarlo en otro lugar.</p>
+            </details>
           </article>
 
           <article class="workflow-step">

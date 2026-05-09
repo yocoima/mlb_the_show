@@ -2141,7 +2141,15 @@ function migrateUserDir(fromUserId, toUserId) {
   const toDir = getUserDir(toUserId);
   fs.mkdirSync(toDir, { recursive: true });
 
-  for (const file of ['auth_state.json', 'scan_results.json', 'inventory_results.json']) {
+  // auth_state siempre se sobreescribe: el usuario acaba de importar cookies frescas
+  const authSrc = path.join(fromDir, 'auth_state.json');
+  const authDst = path.join(toDir, 'auth_state.json');
+  if (fs.existsSync(authSrc)) {
+    fs.copyFileSync(authSrc, authDst);
+  }
+
+  // scan e inventario solo se copian si el destino no existe aun
+  for (const file of ['scan_results.json', 'inventory_results.json']) {
     const src = path.join(fromDir, file);
     const dst = path.join(toDir, file);
     if (fs.existsSync(src) && !fs.existsSync(dst)) {
