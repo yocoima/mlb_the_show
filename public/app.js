@@ -1,4 +1,6 @@
 const importButton = document.getElementById('import-button');
+const importBodyButton = document.getElementById('import-body-button');
+const clearImportButton = document.getElementById('clear-import-button');
 const scanButton = document.getElementById('scan-button');
 const cancelScanButton = document.getElementById('cancel-scan-button');
 const resetButton = document.getElementById('reset-button');
@@ -31,6 +33,8 @@ let scanStatusTimer = null;
 let inventoryStatusTimer = null;
 let groupedCatalogCache = [];
 let groupedMissionCache = [];
+let waitingForScanCompletion = false;
+let currentScanStartedAt = null;
 cancelScanButton.disabled = true;
 
 function getUserToken() {
@@ -69,13 +73,29 @@ bootstrap();
 
 async function bootstrap() {
   await Promise.all([refreshSessionStatus(), loadLastScan(), refreshProgramCatalog(false), loadInventory()]);
+
+  try {
+    const statusResponse = await apiFetch('/api/scan/status');
+    const statusPayload = await statusResponse.json();
+    if (statusPayload?.active) {
+      setBusyState(true);
+      currentScanStartedAt = statusPayload.startedAt || new Date().toISOString();
+      statusNode.textContent = 'Escaneo en progreso (continuando seguimiento)...';
+      startScanStatusPolling(true);
+    }
+  } catch {
+    // Ignore status check errors on startup.
+  }
 }
 
-importButton.addEventListener('click', async () => {
+async function doImportSession() {
   setBusyState(true);
   hideError();
   statusNode.textContent = 'Importando la sesion pegada en auth_state.json...';
   scanDetailNode.textContent = 'Guardando cookies en auth_state.json...';
+  const track = scanProgressBarNode.parentElement;
+  track.classList.add('indeterminate');
+  scanProgressLabelNode.textContent = '...';
 
   try {
     const response = await apiFetch('/api/import-session', {
@@ -90,21 +110,32 @@ importButton.addEventListener('click', async () => {
     }
 
     statusNode.textContent = `Sesion importada. ${payload.cookieCount || 0} cookie(s) guardadas.`;
+    scanDetailNode.textContent = 'Sesion lista. Puedes escanear programas ahora.';
     await Promise.all([refreshSessionStatus(), refreshProgramCatalog()]);
   } catch (error) {
     showError(error.message);
     statusNode.textContent = 'No se pudo importar la sesion.';
+    scanDetailNode.textContent = error.message;
   } finally {
+    track.classList.remove('indeterminate');
+    scanProgressBarNode.style.width = '0%';
+    scanProgressLabelNode.textContent = '—';
     setBusyState(false);
   }
+}
+
+importButton.addEventListener('click', doImportSession);
+importBodyButton.addEventListener('click', doImportSession);
+clearImportButton.addEventListener('click', () => {
+  sessionInput.value = '';
+  sessionInput.focus();
 });
 
 scanButton.addEventListener('click', async () => {
   setBusyState(true);
   hideError();
-  statusNode.textContent = 'Reutilizando la sesion guardada y escaneando programas...';
+  statusNode.textContent = 'Iniciando escaneo...';
   scanDetailNode.textContent = 'Preparando el escaneo de programas seleccionados...';
-  startScanStatusPolling();
 
   try {
     const selectedPrograms = getSelectedProgramUrls();
@@ -119,29 +150,14 @@ scanButton.addEventListener('click', async () => {
       throw new Error(payload.detail || payload.error || 'Error desconocido');
     }
 
-    applyScanPayload(payload);
-    statusNode.textContent = payload.cancelled
-      ? 'Escaneo detenido. Se guardaron los objetivos encontrados hasta ese momento.'
-      : payload.sessionExpired
-      ? 'Escaneo parcial completado. La sesion expiro antes de terminar.'
-      : 'Escaneo completado.';
-
-    if (payload.sessionExpired) {
-      showError('La sesion se cerro durante el escaneo. Se muestran los objetivos encontrados hasta ese momento.');
-    }
-
-    if (payload.cancelled) {
-      showError('El escaneo fue detenido por el usuario. Se muestran los resultados parciales guardados.');
-    }
-
-    await refreshSessionStatus();
+    currentScanStartedAt = payload.startedAt || new Date().toISOString();
+    statusNode.textContent = 'Reutilizando la sesion guardada y escaneando programas...';
+    startScanStatusPolling(true);
+    // setBusyState(false) will be called by the polling when scan completes
   } catch (error) {
     showError(error.message);
     statusNode.textContent = 'El escaneo fallo.';
     scanDetailNode.textContent = error.message;
-    await refreshSessionStatus();
-  } finally {
-    stopScanStatusPolling();
     setBusyState(false);
   }
 });
@@ -221,14 +237,22 @@ refreshProgramsButton.addEventListener('click', async () => {
   hideError();
   statusNode.textContent = 'Actualizando catalogo de programas...';
   scanDetailNode.textContent = 'Descubriendo programas y grupos disponibles.';
+  const track = scanProgressBarNode.parentElement;
+  track.classList.add('indeterminate');
+  scanProgressLabelNode.textContent = '...';
 
   try {
     await refreshProgramCatalog(true);
     statusNode.textContent = 'Catalogo actualizado.';
+    scanDetailNode.textContent = 'Programas disponibles para escanear.';
   } catch (error) {
     showError(error.message);
     statusNode.textContent = 'No se pudo actualizar el catalogo.';
+    scanDetailNode.textContent = error.message;
   } finally {
+    track.classList.remove('indeterminate');
+    scanProgressBarNode.style.width = '0%';
+    scanProgressLabelNode.textContent = '—';
     setBusyState(false);
   }
 });
@@ -551,7 +575,6 @@ function renderMissionGroups(missions) {
                             <th>Mision</th>
                             <th>Requisito</th>
                             <th>Donde jugar</th>
-                            <th>Progreso</th>
                             <th>Avance</th>
                             <th>Sugerencia</th>
                           </tr>
@@ -595,19 +618,21 @@ function renderMissionRow(mission) {
 
   return `
     <tr>
-      <td><div class="mission-name">${escapeHtml(mission.name)}</div></td>
-      <td>${escapeHtml(mission.description || '')}</td>
-      <td>${escapeHtml(mission.whereToPlay || '')}</td>
-      <td>${current} / ${target}</td>
-      <td>
+      <td data-label="Mision"><div class="mission-name">${escapeHtml(mission.name)}</div></td>
+      <td data-label="Requisito">${escapeHtml(mission.description || '')}</td>
+      <td data-label="Donde jugar">${escapeHtml(mission.whereToPlay || '')}</td>
+      <td data-label="Avance">
         <div class="progress-cell">
           <div class="progress-bar">
             <span style="width: ${percent}%"></span>
           </div>
-          <strong>${percent}%</strong>
+          <div class="progress-cell-info">
+            <strong>${percent}%</strong>
+            <span class="progress-fraction">${current} / ${target}</span>
+          </div>
         </div>
       </td>
-      <td>${escapeHtml(mission.suggestion || '')}</td>
+      <td data-label="Sugerencia">${escapeHtml(mission.suggestion || '')}</td>
     </tr>
     ${suggestionDetails}
   `;
@@ -638,7 +663,7 @@ function renderSuggestionDetails(mission) {
   if (!cardsMarkup && !crossHintsMarkup) return '';
   return `
     <tr class="suggestion-detail-row">
-      <td colspan="6">
+      <td colspan="5">
         ${crossHintsMarkup}
         ${cardsMarkup}
       </td>
@@ -775,6 +800,8 @@ function groupProgramMissionsByObjective(missions) {
 
 function setBusyState(isLoading) {
   importButton.disabled = isLoading;
+  importBodyButton.disabled = isLoading;
+  clearImportButton.disabled = isLoading;
   scanButton.disabled = isLoading;
   resetButton.disabled = isLoading;
   refreshProgramsButton.disabled = isLoading;
@@ -789,8 +816,9 @@ function setBusyState(isLoading) {
   scanButton.textContent = isLoading ? 'Procesando...' : 'Escanear programas';
 }
 
-function startScanStatusPolling() {
+function startScanStatusPolling(scanJustStarted = false) {
   stopScanStatusPolling();
+  waitingForScanCompletion = scanJustStarted;
   updateScanProgress({ active: true, percent: 0, phase: 'starting', totalPrograms: 0, completedPrograms: 0, currentProgramTitle: '' });
   scanStatusTimer = setInterval(refreshScanStatus, 1200);
   refreshScanStatus();
@@ -801,9 +829,10 @@ function stopScanStatusPolling() {
     clearInterval(scanStatusTimer);
     scanStatusTimer = null;
   }
+  waitingForScanCompletion = false;
   scanProgressBarNode.parentElement.classList.remove('indeterminate');
   scanProgressBarNode.style.width = '0%';
-  scanProgressLabelNode.textContent = '0%';
+  scanProgressLabelNode.textContent = '—';
 }
 
 function startInventoryStatusPolling() {
@@ -811,6 +840,7 @@ function startInventoryStatusPolling() {
   const track = scanProgressBarNode.parentElement;
   track.classList.add('indeterminate');
   scanProgressLabelNode.textContent = '...';
+  scanProgressLabelNode.classList.add('active');
   scanDetailNode.textContent = 'Iniciando escaneo de inventario...';
   inventoryStatusTimer = setInterval(refreshInventoryStatus, 1500);
 }
@@ -822,7 +852,8 @@ function stopInventoryStatusPolling() {
   }
   scanProgressBarNode.parentElement.classList.remove('indeterminate');
   scanProgressBarNode.style.width = '0%';
-  scanProgressLabelNode.textContent = '0%';
+  scanProgressLabelNode.textContent = '—';
+  scanProgressLabelNode.classList.remove('active');
 }
 
 async function refreshInventoryStatus() {
@@ -841,8 +872,31 @@ async function refreshScanStatus() {
     const response = await apiFetch('/api/scan/status');
     const payload = await response.json();
     updateScanProgress(payload);
+
+    if (waitingForScanCompletion && !payload.active && payload.completedAt) {
+      const completedAfterStart = !currentScanStartedAt || new Date(payload.completedAt) >= new Date(currentScanStartedAt) - 5000;
+      if (completedAfterStart) {
+        waitingForScanCompletion = false;
+        stopScanStatusPolling();
+        setBusyState(false);
+
+        if (payload.lastError) {
+          showError(payload.lastError);
+          const isSoftWarning = payload.lastError.includes('detenido') || payload.lastError.includes('expiro');
+          statusNode.textContent = isSoftWarning ? 'Escaneo finalizado con avisos.' : 'El escaneo fallo.';
+          if (!isSoftWarning) {
+            scanDetailNode.textContent = payload.lastError;
+          }
+        } else {
+          statusNode.textContent = 'Escaneo completado.';
+        }
+
+        await loadLastScan();
+        await refreshSessionStatus();
+      }
+    }
   } catch {
-    // Ignore transient polling errors while the main request is still running.
+    // Ignore transient polling errors.
   }
 }
 
@@ -851,21 +905,31 @@ function updateScanProgress(payload) {
   const track = scanProgressBarNode.parentElement;
   const isDiscovering = payload?.active && percent === 0;
 
+  if (!payload?.active && !scanStatusTimer) {
+    track.classList.remove('indeterminate');
+    scanProgressBarNode.style.width = '0%';
+    scanProgressLabelNode.textContent = '—';
+    scanProgressLabelNode.classList.remove('active');
+    scanDetailNode.textContent = 'Todavia no hay un escaneo en progreso.';
+    return;
+  }
+
   if (isDiscovering) {
     track.classList.add('indeterminate');
     scanProgressLabelNode.textContent = '...';
+    scanProgressLabelNode.classList.add('active');
   } else {
     track.classList.remove('indeterminate');
     scanProgressBarNode.style.width = `${percent}%`;
-    scanProgressLabelNode.textContent = `${percent}%`;
+    scanProgressLabelNode.textContent = payload?.active ? `${percent}%` : '—';
+    if (payload?.active) {
+      scanProgressLabelNode.classList.add('active');
+    } else {
+      scanProgressLabelNode.classList.remove('active');
+    }
   }
 
   if (!payload?.active) {
-    if (!scanStatusTimer) {
-      scanDetailNode.textContent = 'Todavia no hay un escaneo en progreso.';
-      scanProgressBarNode.style.width = '0%';
-      scanProgressLabelNode.textContent = '0%';
-    }
     return;
   }
 

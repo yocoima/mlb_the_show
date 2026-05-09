@@ -164,8 +164,14 @@ body::before {
   padding: 6px 10px;
   border-radius: 999px;
   background: rgba(77, 182, 255, 0.14);
-  color: var(--text);
+  color: var(--muted);
   font-weight: 800;
+  transition: background 300ms ease, color 300ms ease;
+}
+
+.scan-progress-label.active {
+  background: rgba(77, 182, 255, 0.22);
+  color: var(--text);
 }
 
 .scan-progress-track {
@@ -347,7 +353,14 @@ body::before {
 }
 
 .import-body {
-  padding: 0 28px 20px;
+  padding: 0 28px 24px;
+}
+
+.import-body-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
 }
 
 .import-help {
@@ -627,13 +640,24 @@ td {
 
 .progress-cell {
   display: flex;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 130px;
+}
+
+.progress-cell-info {
+  display: flex;
   align-items: center;
-  min-width: 150px;
+  gap: 8px;
+}
+
+.progress-fraction {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .progress-bar {
-  width: 120px;
+  width: 100%;
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
@@ -721,17 +745,17 @@ td {
 
 .group-table-wrap table th:nth-child(2),
 .group-table-wrap table td:nth-child(2) {
-  width: 22%;
+  width: 26%;
 }
 
 .group-table-wrap table th:nth-child(3),
 .group-table-wrap table td:nth-child(3) {
-  width: 23%;
+  width: 26%;
 }
 
-.group-table-wrap table th:nth-child(5),
-.group-table-wrap table td:nth-child(5) {
-  width: 150px;
+.group-table-wrap table th:nth-child(4),
+.group-table-wrap table td:nth-child(4) {
+  width: 140px;
 }
 
 .empty-row td {
@@ -759,11 +783,14 @@ td {
 
   .hero,
   .summary-panel,
-  .table-header,
-  th,
-  td {
+  .table-header {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  .hero {
+    padding-top: 22px;
+    padding-bottom: 22px;
   }
 
   .summary-panel {
@@ -778,11 +805,115 @@ td {
     grid-template-columns: 1fr;
   }
 
-  .scan-status-panel {
+  .workflow-actions {
     flex-direction: column;
   }
 
+  .workflow-actions > button {
+    width: 100%;
+  }
+
+  .scan-status-panel {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .import-body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .program-selector {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .missions-groups {
+    padding: 0 12px 16px;
+  }
+
+  .objective-group {
+    margin: 10px 12px 12px;
+  }
+
+  /* ── Mobile mission table → card layout ── */
+  .group-table-wrap thead {
+    display: none;
+  }
+
+  .group-table-wrap table,
+  .group-table-wrap tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .group-table-wrap tr:not(.suggestion-detail-row) {
+    display: block;
+    border: 1px solid rgba(158, 178, 207, 0.18);
+    border-radius: 14px;
+    padding: 14px 16px 10px;
+    margin-bottom: 4px;
+  }
+
+  .group-table-wrap tr:not(.suggestion-detail-row):has(+ .suggestion-detail-row) {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom-color: transparent;
+  }
+
+  .group-table-wrap tr.suggestion-detail-row {
+    display: block;
+    border: 1px solid rgba(158, 178, 207, 0.18);
+    border-top: none;
+    border-radius: 0 0 14px 14px;
+    margin-bottom: 10px;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.015);
+  }
+
+  .group-table-wrap td {
+    display: block;
+    padding: 5px 0;
+    border: none;
+    text-align: left;
+    line-height: 1.4;
+  }
+
+  .group-table-wrap tr.suggestion-detail-row td {
+    padding: 12px 16px;
+  }
+
+  .group-table-wrap td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    margin-bottom: 2px;
+  }
+
+  .group-table-wrap tr.suggestion-detail-row td::before {
+    display: none;
+  }
+
+  /* Override fixed column widths on mobile */
+  .group-table-wrap table th:nth-child(2),
+  .group-table-wrap table td:nth-child(2),
+  .group-table-wrap table th:nth-child(3),
+  .group-table-wrap table td:nth-child(3),
+  .group-table-wrap table th:nth-child(4),
+  .group-table-wrap table td:nth-child(4) {
+    width: auto;
+  }
+
   .progress-cell {
-    min-width: 180px;
+    min-width: 0;
+  }
+
+  .progress-bar {
+    flex: 1;
+    width: auto;
   }
 }

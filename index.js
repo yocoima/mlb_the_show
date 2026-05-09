@@ -63,6 +63,8 @@ function getScanState(userId) {
       completedPrograms: 0,
       currentProgramTitle: '',
       startedAt: null,
+      completedAt: null,
+      lastError: null,
     });
   }
   return scanStates.get(userId);
@@ -328,18 +330,46 @@ app.get('/api/open-login', async (req, res) => {
 app.get('/api/scan', async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
-  return handleScanRequest([], res, userId);
+  const results = normalizeUntitledPrograms(readScanResults(userId));
+  const inventory = readInventoryResults(userId);
+  const enriched = attachInventorySuggestionsToScanResults(results, inventory);
+  res.json(enriched);
 });
 
-app.post('/api/scan', async (req, res) => {
+app.post('/api/scan', (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
+
+  const state = getScanState(userId);
+
+  if (state.active) {
+    return res.status(409).json({
+      error: 'Ya hay un escaneo en progreso.',
+      detail: 'Espera a que termine o usa el boton Detener escaneo.',
+    });
+  }
+
+  if (isSonyRateLimited()) {
+    return res.status(429).json({
+      error: 'Sony esta limitando temporalmente el login.',
+      detail: buildSonyRateLimitMessage(),
+    });
+  }
+
+  if (!hasSavedAuthState(userId)) {
+    return res.status(400).json({
+      error: 'No existe una sesion persistida.',
+      detail: 'Primero prepara una sesion valida desde PC para crear auth_state.json.',
+    });
+  }
 
   const selectedPrograms = Array.isArray(req.body?.selectedPrograms)
     ? req.body.selectedPrograms.filter(Boolean)
     : [];
 
-  return handleScanRequest(selectedPrograms, res, userId);
+  runScanInBackground(selectedPrograms, userId);
+
+  return res.json({ ok: true, started: true, startedAt: new Date().toISOString() });
 });
 
 app.post('/api/scan/cancel', (req, res) => {
@@ -380,6 +410,8 @@ app.get('/api/scan/status', (req, res) => {
     completedPrograms: completed,
     currentProgramTitle: state.currentProgramTitle || '',
     startedAt: state.startedAt,
+    completedAt: state.completedAt,
+    lastError: state.lastError,
     percent,
   });
 });
@@ -473,34 +505,13 @@ app.post('/api/inventory/scan', async (req, res) => {
   }
 });
 
-async function handleScanRequest(selectedPrograms, res, userId) {
+async function runScanInBackground(selectedPrograms, userId) {
   let browser;
   let context;
   let scanCancelled = false;
   const state = getScanState(userId);
 
   try {
-    if (state.active) {
-      return res.status(409).json({
-        error: 'Ya hay un escaneo en progreso.',
-        detail: 'Espera a que termine o usa el boton Detener escaneo.',
-      });
-    }
-
-    if (isSonyRateLimited()) {
-      return res.status(429).json({
-        error: 'Sony esta limitando temporalmente el login.',
-        detail: buildSonyRateLimitMessage(),
-      });
-    }
-
-    if (!hasSavedAuthState(userId)) {
-      return res.status(400).json({
-        error: 'No existe una sesion persistida.',
-        detail: 'Primero prepara una sesion valida desde PC para crear auth_state.json.',
-      });
-    }
-
     state.active = true;
     state.cancelRequested = false;
     state.phase = 'validating-session';
@@ -508,6 +519,8 @@ async function handleScanRequest(selectedPrograms, res, userId) {
     state.completedPrograms = 0;
     state.currentProgramTitle = '';
     state.startedAt = new Date().toISOString();
+    state.completedAt = null;
+    state.lastError = null;
 
     browser = await launchBrowser();
     context = await browser.newContext({
@@ -523,10 +536,7 @@ async function handleScanRequest(selectedPrograms, res, userId) {
 
     if (!isAuthenticatedMlbUrl(page.url())) {
       fs.rmSync(getAuthStateFile(userId), { force: true });
-      return res.status(401).json({
-        error: 'La sesion persistida vencio.',
-        detail: 'auth_state.json ya no es valido. Debes renovar la sesion desde PC.',
-      });
+      throw new Error('La sesion persistida vencio. Debes renovar la sesion desde PC.');
     }
 
     await page.goto(PROGRAMS_URL, {
@@ -641,28 +651,31 @@ async function handleScanRequest(selectedPrograms, res, userId) {
     }
 
     writeScanResults(userId, scanResults);
-    res.json(attachInventorySuggestionsToScanResults(scanResults, readInventoryResults(userId)));
+
+    if (scanCancelled) {
+      state.lastError = 'Escaneo detenido. Se guardaron los objetivos encontrados hasta ese momento.';
+    } else if (sessionExpired) {
+      state.lastError = 'La sesion expiro durante el escaneo. Se muestran los objetivos encontrados hasta ese momento.';
+    }
   } catch (error) {
     console.error('Error en la automatizacion:', error);
-    res.status(500).json({
-      error: 'No se pudo completar el escaneo.',
-      detail: buildUserFacingError(error),
-    });
+    state.lastError = buildUserFacingError(error);
   } finally {
     state.active = false;
     state.cancelRequested = false;
     state.phase = 'idle';
+    state.completedAt = new Date().toISOString();
     state.totalPrograms = 0;
     state.completedPrograms = 0;
     state.currentProgramTitle = '';
     state.startedAt = null;
 
     if (context) {
-      await context.close();
+      await context.close().catch(() => {});
     }
 
     if (browser) {
-      await browser.close();
+      await browser.close().catch(() => {});
     }
   }
 }
