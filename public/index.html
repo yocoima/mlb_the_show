@@ -61,6 +61,15 @@
               <button id="cancel-scan-button" class="ghost-button">Detener escaneo</button>
             </div>
           </article>
+
+          <article class="workflow-step workflow-step-ai">
+            <p class="workflow-step-number">Paso 4</p>
+            <h2>Analisis estrategico</h2>
+            <p class="workflow-copy">La IA cruza todos tus objetivos activos con tu inventario y recomienda que cartas usar para avanzar varios a la vez.</p>
+            <div class="workflow-actions">
+              <button id="ai-suggest-button" class="ai-button">Analizar objetivos con IA</button>
+            </div>
+          </article>
         </div>
 
         <div class="scan-status-panel">
@@ -169,6 +178,18 @@
         </div>
 
         <div id="missions-groups" class="missions-groups"></div>
+      </section>
+
+      <section id="ai-panel" class="panel ai-panel hidden">
+        <div class="table-header ai-panel-header">
+          <div>
+            <p class="panel-label ai-label">Inteligencia Artificial · Groq llama-3.3-70b</p>
+            <h2>Analisis estrategico de objetivos</h2>
+          </div>
+          <button id="ai-regenerate-button" class="ghost-button">Regenerar</button>
+        </div>
+        <div id="ai-summary-block" class="ai-summary-block hidden"></div>
+        <div id="ai-results" class="ai-results"></div>
       </section>
     </main>
 

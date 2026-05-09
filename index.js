@@ -680,6 +680,159 @@ async function runScanInBackground(selectedPrograms, userId) {
   }
 }
 
+app.post('/api/ai-suggest', async (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    return res.status(503).json({
+      error: 'Servicio de IA no disponible.',
+      detail: 'La variable GROQ_API_KEY no esta configurada en el servidor. Agregala en Render → Settings → Environment Variables.',
+    });
+  }
+
+  try {
+    const scanResults = normalizeUntitledPrograms(readScanResults(userId));
+    const inventory = readInventoryResults(userId);
+
+    const missions = (scanResults.missions || []).filter((m) => (m.current || 0) < (m.target || 0));
+    const cards = inventory?.cards || [];
+
+    if (!missions.length) {
+      return res.status(400).json({
+        error: 'No hay objetivos activos para analizar.',
+        detail: 'Ejecuta un escaneo de programas primero.',
+      });
+    }
+
+    const prompt = buildAiSuggestPrompt(missions, cards);
+    const rawResponse = await callGroqApi(apiKey, prompt);
+
+    let parsed;
+    try {
+      const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawResponse);
+    } catch {
+      return res.status(500).json({
+        error: 'La IA devolvio una respuesta con formato invalido.',
+        detail: 'Intenta de nuevo. Si el error persiste, reduce la cantidad de programas seleccionados.',
+      });
+    }
+
+    return res.json({
+      recommendations: parsed.recommendations || [],
+      best_overall_modes: parsed.best_overall_modes || [],
+      summary: parsed.summary || '',
+      analyzedAt: new Date().toISOString(),
+      missionsAnalyzed: missions.length,
+      cardsProvided: cards.length,
+    });
+  } catch (error) {
+    console.error('[ai-suggest] Error:', error.message);
+    return res.status(500).json({
+      error: 'No se pudo completar el analisis de IA.',
+      detail: error.message,
+    });
+  }
+});
+
+async function callGroqApi(apiKey, userPrompt) {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content: 'Eres un experto en MLB The Show 26 Diamond Dynasty. Analizas misiones del juego y recomiendas estrategias optimas. Respondes SIEMPRE con JSON valido segun el esquema que se te indique. Sin texto extra fuera del JSON.',
+        },
+        {
+          role: 'user',
+          content: userPrompt,
+        },
+      ],
+      temperature: 0.25,
+      max_tokens: 6000,
+      response_format: { type: 'json_object' },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Groq API ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+function buildAiSuggestPrompt(missions, cards) {
+  const missionsText = missions
+    .slice(0, 80)
+    .map((m, i) =>
+      `${i + 1}. [${escapeJsonString(m.programTitle)}] ${escapeJsonString(m.name)}\n   Requisito: ${escapeJsonString(m.description)}\n   Donde jugar: ${escapeJsonString(m.whereToPlay)}\n   Progreso: ${m.current}/${m.target}`
+    )
+    .join('\n\n');
+
+  const cardsText = cards.length
+    ? cards
+        .slice(0, 400)
+        .map((c) => `- ${c.name} (${c.overall || '?'} OVR) ${c.position || ''}${c.team ? ` | ${c.team}` : ''}${c.series ? ` | Serie: ${c.series}` : ''}`)
+        .join('\n')
+    : 'Sin inventario escaneado.';
+
+  return `Analiza los siguientes objetivos activos de MLB The Show 26 y el inventario de cartas del jugador. Tu objetivo es encontrar las estrategias mas eficientes para avanzar MULTIPLES objetivos en la misma sesion de juego.
+
+OBJETIVOS ACTIVOS (${missions.length} objetivos${missions.length > 80 ? ', mostrando los primeros 80' : ''}):
+${missionsText}
+
+INVENTARIO DEL JUGADOR (${cards.length} cartas${cards.length > 400 ? ', mostrando las primeras 400' : ''}):
+${cardsText}
+
+REGLAS DE ANALISIS:
+1. Agrupa objetivos que se puedan completar en la misma partida porque sus requisitos se solapan (mismo tipo de stat, misma serie de cartas, mismo equipo, etc.)
+2. Los modos de juego recomendados para cada grupo DEBEN aparecer en el "Donde jugar" de TODOS los objetivos del grupo
+3. Recomienda las cartas del inventario que cubran MAS objetivos del grupo. Marca "in_inventory": true si la carta esta en el inventario, false si la sugieres aunque no este
+4. Una carta puede cubrir varios objetivos si cumple multiples requisitos (ej: un Yankees de Serie Spotlight cuenta para objetivos de Yankees Y de Spotlight Y de hitters)
+5. Ordena las recomendaciones de mayor a menor impacto (el grupo con mas objetivos cubiertos primero)
+6. Si no hay cartas en inventario que sirvan, sugiere que carta conseguir (in_inventory: false)
+
+Responde UNICAMENTE con este JSON valido:
+{
+  "recommendations": [
+    {
+      "missions_covered": ["nombre exacto mision 1", "nombre exacto mision 2"],
+      "programs": ["programa1", "programa2"],
+      "best_modes": ["Conquest", "Mini Seasons"],
+      "recommended_cards": [
+        {
+          "name": "Nombre jugador",
+          "overall": 93,
+          "position": "1B",
+          "team": "Yankees",
+          "series": "Spotlight",
+          "in_inventory": true,
+          "covers_missions_count": 3,
+          "reason": "Es Yankees (Affinity), Spotlight (XP objetivo), y bateador (hit milestone). Un jugador con esta carta en Conquest avanza los 3 objetivos a la vez."
+        }
+      ],
+      "strategy": "Descripcion concisa de la estrategia: que hacer, con que cartas y en que modo."
+    }
+  ],
+  "best_overall_modes": ["Conquest", "Mini Seasons"],
+  "summary": "Resumen ejecutivo: la forma mas eficiente de avanzar todos los objetivos con el inventario actual."
+}`;
+}
+
+function escapeJsonString(value) {
+  return String(value || '').replace(/[\n\r"\\]/g, ' ').trim();
+}
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });

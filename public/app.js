@@ -2,6 +2,11 @@ const importButton = document.getElementById('import-button');
 const importBodyButton = document.getElementById('import-body-button');
 const clearImportButton = document.getElementById('clear-import-button');
 const scanButton = document.getElementById('scan-button');
+const aiSuggestButton = document.getElementById('ai-suggest-button');
+const aiRegenerateButton = document.getElementById('ai-regenerate-button');
+const aiPanel = document.getElementById('ai-panel');
+const aiResultsNode = document.getElementById('ai-results');
+const aiSummaryBlock = document.getElementById('ai-summary-block');
 const cancelScanButton = document.getElementById('cancel-scan-button');
 const resetButton = document.getElementById('reset-button');
 const refreshProgramsButton = document.getElementById('refresh-programs-button');
@@ -975,4 +980,165 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+// ── Modulo de analisis estrategico con IA ──────────────────────────────────
+
+async function runAiSuggest() {
+  aiSuggestButton.disabled = true;
+  aiRegenerateButton.disabled = true;
+  aiSuggestButton.textContent = 'Analizando...';
+  hideError();
+
+  const track = scanProgressBarNode.parentElement;
+  track.classList.add('indeterminate');
+  scanProgressLabelNode.textContent = 'IA';
+  scanProgressLabelNode.classList.add('active');
+  statusNode.textContent = 'La IA esta analizando tus objetivos...';
+  scanDetailNode.textContent = 'Cruzando requisitos, modos de juego e inventario. Esto puede tardar 10-20 segundos.';
+
+  aiPanel.classList.remove('hidden');
+  aiResultsNode.innerHTML = '<div class="ai-loading"><span class="ai-loading-dot"></span><span class="ai-loading-dot"></span><span class="ai-loading-dot"></span></div>';
+  aiSummaryBlock.classList.add('hidden');
+  aiPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const response = await apiFetch('/api/ai-suggest', { method: 'POST' });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.detail || payload.error || 'Error desconocido');
+    }
+
+    renderAiRecommendations(payload);
+    statusNode.textContent = `Analisis completado. ${payload.missionsAnalyzed} objetivos · ${payload.cardsProvided} cartas analizadas.`;
+    scanDetailNode.textContent = formatDate(payload.analyzedAt);
+  } catch (error) {
+    showError(error.message);
+    statusNode.textContent = 'No se pudo completar el analisis de IA.';
+    aiResultsNode.innerHTML = `<div class="ai-error"><p>${escapeHtml(error.message)}</p></div>`;
+  } finally {
+    track.classList.remove('indeterminate');
+    scanProgressBarNode.style.width = '0%';
+    scanProgressLabelNode.textContent = '—';
+    scanProgressLabelNode.classList.remove('active');
+    aiSuggestButton.disabled = false;
+    aiRegenerateButton.disabled = false;
+    aiSuggestButton.textContent = 'Analizar objetivos con IA';
+  }
+}
+
+aiSuggestButton.addEventListener('click', runAiSuggest);
+aiRegenerateButton.addEventListener('click', runAiSuggest);
+
+function renderAiRecommendations(payload) {
+  const recommendations = Array.isArray(payload.recommendations) ? payload.recommendations : [];
+  const bestModes = Array.isArray(payload.best_overall_modes) ? payload.best_overall_modes : [];
+  const summary = payload.summary || '';
+
+  if (summary) {
+    aiSummaryBlock.innerHTML = `
+      <div class="ai-summary-inner">
+        <strong class="ai-summary-label">Resumen estrategico</strong>
+        <p class="ai-summary-text">${escapeHtml(summary)}</p>
+        ${bestModes.length ? `
+          <div class="ai-summary-modes">
+            <span class="ai-field-label">Mejores modos globales:</span>
+            ${bestModes.map((mode) => `<span class="ai-mode-chip">${escapeHtml(mode)}</span>`).join('')}
+          </div>
+        ` : ''}
+      </div>
+    `;
+    aiSummaryBlock.classList.remove('hidden');
+  }
+
+  if (!recommendations.length) {
+    aiResultsNode.innerHTML = '<div class="ai-empty">No se encontraron combinaciones estrategicas. Intenta escanear mas programas.</div>';
+    return;
+  }
+
+  aiResultsNode.innerHTML = recommendations.map((rec, index) => renderAiRecommendationCard(rec, index + 1)).join('');
+}
+
+function renderAiRecommendationCard(rec, index) {
+  const missions = Array.isArray(rec.missions_covered) ? rec.missions_covered : [];
+  const programs = Array.isArray(rec.programs) ? rec.programs : [];
+  const modes = Array.isArray(rec.best_modes) ? rec.best_modes : [];
+  const cards = Array.isArray(rec.recommended_cards) ? rec.recommended_cards : [];
+  const strategy = rec.strategy || '';
+
+  const inventoryCards = cards.filter((c) => c.in_inventory);
+  const suggestedCards = cards.filter((c) => !c.in_inventory);
+
+  return `
+    <div class="ai-rec-card">
+      <div class="ai-rec-header">
+        <div class="ai-rec-badge">${index}</div>
+        <div class="ai-rec-meta">
+          <div class="ai-rec-programs">
+            ${programs.map((p) => `<span class="ai-program-chip">${escapeHtml(p)}</span>`).join('')}
+          </div>
+          <div class="ai-rec-modes">
+            ${modes.map((m) => `<span class="ai-mode-chip">${escapeHtml(m)}</span>`).join('')}
+          </div>
+        </div>
+        <div class="ai-rec-count">${missions.length} objetivo${missions.length !== 1 ? 's' : ''}</div>
+      </div>
+
+      ${strategy ? `
+        <div class="ai-strategy">
+          <span class="ai-field-label">Estrategia</span>
+          <p>${escapeHtml(strategy)}</p>
+        </div>
+      ` : ''}
+
+      <div class="ai-missions-list">
+        <span class="ai-field-label">Objetivos cubiertos</span>
+        <ul>
+          ${missions.map((m) => `<li>${escapeHtml(m)}</li>`).join('')}
+        </ul>
+      </div>
+
+      ${inventoryCards.length ? `
+        <div class="ai-cards-section">
+          <span class="ai-field-label ai-field-label-owned">Cartas en tu inventario</span>
+          <div class="ai-card-list">
+            ${inventoryCards.map((card) => renderAiCard(card, true)).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      ${suggestedCards.length ? `
+        <div class="ai-cards-section">
+          <span class="ai-field-label ai-field-label-missing">Cartas a conseguir</span>
+          <div class="ai-card-list">
+            ${suggestedCards.map((card) => renderAiCard(card, false)).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderAiCard(card, owned) {
+  const overlapLabel = card.covers_missions_count > 1
+    ? `<span class="ai-card-overlap">cubre ${card.covers_missions_count} objetivos</span>`
+    : '';
+
+  return `
+    <div class="ai-card-row ${owned ? 'ai-card-owned' : 'ai-card-missing'}">
+      <div class="ai-card-indicator">${owned ? '✓' : '+'}</div>
+      <div class="ai-card-info">
+        <strong class="ai-card-name">${escapeHtml(card.name || '')}</strong>
+        <span class="ai-card-attrs">
+          ${card.overall ? `${card.overall} OVR` : ''}
+          ${card.position ? ` · ${escapeHtml(card.position)}` : ''}
+          ${card.team ? ` · ${escapeHtml(card.team)}` : ''}
+          ${card.series ? ` · ${escapeHtml(card.series)}` : ''}
+        </span>
+        ${overlapLabel}
+        ${card.reason ? `<span class="ai-card-reason">${escapeHtml(card.reason)}</span>` : ''}
+      </div>
+    </div>
+  `;
 }
