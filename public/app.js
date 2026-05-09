@@ -77,7 +77,7 @@ async function apiFetch(url, options = {}) {
 bootstrap();
 
 async function bootstrap() {
-  await Promise.all([refreshSessionStatus(), loadLastScan(), refreshProgramCatalog(false), loadInventory()]);
+  await Promise.all([refreshSessionStatus(), loadLastScan(), refreshProgramCatalog(), loadInventory()]);
 
   try {
     const statusResponse = await apiFetch('/api/scan/status');
@@ -245,9 +245,22 @@ refreshProgramsButton.addEventListener('click', async () => {
   const track = scanProgressBarNode.parentElement;
   track.classList.add('indeterminate');
   scanProgressLabelNode.textContent = '...';
+  scanProgressLabelNode.classList.add('active');
 
   try {
-    await refreshProgramCatalog(true);
+    const startRes = await apiFetch('/api/programs/catalog/refresh', { method: 'POST' });
+    const startPayload = await startRes.json();
+    if (!startRes.ok) {
+      throw new Error(startPayload.detail || startPayload.error || 'Error desconocido');
+    }
+
+    await pollUntilDone(
+      '/api/programs/catalog/refresh-status',
+      1500,
+      (st) => { scanDetailNode.textContent = `Descubriendo catalogo (fase: ${st.phase || '...'})...`; }
+    );
+
+    await refreshProgramCatalog(false);
     statusNode.textContent = 'Catalogo actualizado.';
     scanDetailNode.textContent = 'Programas disponibles para escanear.';
   } catch (error) {
@@ -258,6 +271,7 @@ refreshProgramsButton.addEventListener('click', async () => {
     track.classList.remove('indeterminate');
     scanProgressBarNode.style.width = '0%';
     scanProgressLabelNode.textContent = '—';
+    scanProgressLabelNode.classList.remove('active');
     setBusyState(false);
   }
 });
@@ -269,15 +283,25 @@ scanInventoryButton.addEventListener('click', async () => {
   startInventoryStatusPolling();
 
   try {
-    const response = await apiFetch('/api/inventory/scan', { method: 'POST' });
-    const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.detail || payload.error || 'Error desconocido');
+    const startRes = await apiFetch('/api/inventory/scan', { method: 'POST' });
+    const startPayload = await startRes.json();
+    if (!startRes.ok) {
+      throw new Error(startPayload.detail || startPayload.error || 'Error desconocido');
     }
 
-    inventoryPayload = payload;
-    renderInventorySummary(payload);
+    const finalState = await pollUntilDone(
+      '/api/inventory/scan-status',
+      1500,
+      (st) => {
+        scanDetailNode.textContent = `Leyendo inventario · Pagina ${st.pagesScanned} · ${st.cardsFound} cartas encontradas`;
+      }
+    );
+
+    if (finalState.lastError) {
+      throw new Error(finalState.lastError);
+    }
+
+    await loadInventory();
     await loadLastScan();
     statusNode.textContent = 'Inventario actualizado.';
   } catch (error) {
@@ -348,8 +372,8 @@ async function refreshSessionStatus() {
   }
 }
 
-async function refreshProgramCatalog(forceRefresh = false) {
-  const response = await apiFetch(`/api/programs/catalog${forceRefresh ? '?refresh=1' : ''}`);
+async function refreshProgramCatalog() {
+  const response = await apiFetch('/api/programs/catalog');
   const payload = await response.json();
 
   if (!response.ok) {
@@ -363,6 +387,25 @@ async function refreshProgramCatalog(forceRefresh = false) {
   selectedProgramUrls = new Set(Array.from(selectedProgramUrls).filter((url) => availableUrls.has(url)));
 
   renderProgramSelector(programCatalog);
+}
+
+async function pollUntilDone(statusUrl, intervalMs, onTick) {
+  return new Promise((resolve, reject) => {
+    const timer = setInterval(async () => {
+      try {
+        const response = await apiFetch(statusUrl);
+        const state = await response.json();
+        if (onTick) onTick(state);
+        if (!state.active && state.completedAt) {
+          clearInterval(timer);
+          resolve(state);
+        }
+      } catch (err) {
+        clearInterval(timer);
+        reject(err);
+      }
+    }, intervalMs);
+  });
 }
 
 function applyScanPayload(payload) {
@@ -866,7 +909,7 @@ async function refreshInventoryStatus() {
     const response = await apiFetch('/api/inventory/scan-status');
     const payload = await response.json();
     if (!payload?.active) return;
-    scanDetailNode.textContent = `Leyendo inventario · Pagina ${payload.pagesScanned} · ${payload.cardsFound} cartas encontradas`;
+    scanDetailNode.textContent = `Leyendo inventario · Pagina ${payload.pagesScanned || 0} · ${payload.cardsFound || 0} cartas encontradas`;
   } catch {
     // Ignore transient polling errors.
   }

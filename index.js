@@ -23,12 +23,33 @@ const PROGRAM_DISCOVERY_PATTERNS = [
 let lastSonyRateLimitAt = 0;
 const scanStates = new Map();
 const inventoryScanStates = new Map();
+const catalogScanStates = new Map();
 
 function getInventoryScanState(userId) {
   if (!inventoryScanStates.has(userId)) {
-    inventoryScanStates.set(userId, { active: false, pagesScanned: 0, cardsFound: 0 });
+    inventoryScanStates.set(userId, {
+      active: false,
+      pagesScanned: 0,
+      cardsFound: 0,
+      startedAt: null,
+      completedAt: null,
+      lastError: null,
+    });
   }
   return inventoryScanStates.get(userId);
+}
+
+function getCatalogScanState(userId) {
+  if (!catalogScanStates.has(userId)) {
+    catalogScanStates.set(userId, {
+      active: false,
+      phase: 'idle',
+      startedAt: null,
+      completedAt: null,
+      lastError: null,
+    });
+  }
+  return catalogScanStates.get(userId);
 }
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -203,73 +224,56 @@ app.get('/api/session-status', async (req, res) => {
   }
 });
 
-app.get('/api/programs/catalog', async (req, res) => {
+app.get('/api/programs/catalog', (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
 
-  let browser;
-  let context;
+  const previousResults = normalizeUntitledPrograms(readScanResults(userId));
+  const cachedPrograms = filterIgnoredPrograms(previousResults.catalogPrograms)
+    .filter((program) => !isUntitledProgram(program));
 
-  try {
-    const forceRefresh = req.query.refresh === '1';
-    const previousResults = normalizeUntitledPrograms(readScanResults(userId));
+  res.json({
+    discoveredAt: previousResults.scannedAt || null,
+    programs: cachedPrograms,
+    cached: true,
+  });
+});
 
-    const cachedPrograms = filterIgnoredPrograms(previousResults.catalogPrograms).filter((program) => !isUntitledProgram(program));
+app.post('/api/programs/catalog/refresh', (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
 
-    if (!forceRefresh) {
-      return res.json({
-        discoveredAt: previousResults.scannedAt || null,
-        programs: cachedPrograms,
-        cached: true,
-      });
-    }
-
-    if (!hasSavedAuthState(userId)) {
-      return res.json({
-        programs: [],
-        discoveredAt: null,
-      });
-    }
-
-    browser = await launchBrowser();
-    context = await browser.newContext({
-      storageState: getAuthStateFile(userId),
+  const state = getCatalogScanState(userId);
+  if (state.active) {
+    return res.status(409).json({
+      error: 'Ya hay una actualizacion de catalogo en progreso.',
+      detail: 'Espera a que termine antes de volver a actualizar.',
     });
-
-    const page = await context.newPage();
-
-    await page.goto(PROGRAMS_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
-
-    ensureAuthenticatedPage(page);
-
-    const discovery = await discoverProgramTargets(context, page);
-    const programs = normalizeCatalogPrograms(
-      (await hydrateMissingProgramTitles(context, filterIgnoredPrograms(discovery.programs)))
-        .filter((program) => !isUntitledProgram(program))
-    );
-
-    res.json({
-      discoveredAt: new Date().toISOString(),
-      programs,
-      cached: false,
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'No se pudo descubrir el catalogo de programas.',
-      detail: buildUserFacingError(error),
-    });
-  } finally {
-    if (context) {
-      await context.close();
-    }
-
-    if (browser) {
-      await browser.close();
-    }
   }
+
+  if (!hasSavedAuthState(userId)) {
+    return res.status(400).json({
+      error: 'No existe una sesion persistida.',
+      detail: 'Primero importa o prepara una sesion valida.',
+    });
+  }
+
+  const startedAt = new Date().toISOString();
+  state.active = true;
+  state.phase = 'starting';
+  state.startedAt = startedAt;
+  state.completedAt = null;
+  state.lastError = null;
+
+  res.json({ ok: true, started: true, startedAt });
+  res.on('finish', () => runCatalogScanInBackground(userId));
+});
+
+app.get('/api/programs/catalog/refresh-status', (req, res) => {
+  const userId = requireUserId(req, res);
+  if (!userId) return;
+  const state = getCatalogScanState(userId);
+  res.json(state);
 });
 
 app.get('/api/open-login', async (req, res) => {
@@ -367,9 +371,19 @@ app.post('/api/scan', (req, res) => {
     ? req.body.selectedPrograms.filter(Boolean)
     : [];
 
-  runScanInBackground(selectedPrograms, userId);
+  const startedAt = new Date().toISOString();
+  state.active = true;
+  state.cancelRequested = false;
+  state.phase = 'queued';
+  state.totalPrograms = 0;
+  state.completedPrograms = 0;
+  state.currentProgramTitle = '';
+  state.startedAt = startedAt;
+  state.completedAt = null;
+  state.lastError = null;
 
-  return res.json({ ok: true, started: true, startedAt: new Date().toISOString() });
+  res.json({ ok: true, started: true, startedAt });
+  res.on('finish', () => runScanInBackground(selectedPrograms, userId));
 });
 
 app.post('/api/scan/cancel', (req, res) => {
@@ -420,90 +434,125 @@ app.get('/api/inventory/scan-status', (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
   const state = getInventoryScanState(userId);
-  res.json(state);
+  res.json({
+    active: state.active,
+    pagesScanned: state.pagesScanned,
+    cardsFound: state.cardsFound,
+    startedAt: state.startedAt,
+    completedAt: state.completedAt,
+    lastError: state.lastError,
+  });
 });
 
-app.post('/api/inventory/scan', async (req, res) => {
+app.post('/api/inventory/scan', (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
 
+  const invState = getInventoryScanState(userId);
+  if (invState.active) {
+    return res.status(409).json({
+      error: 'Ya hay un escaneo de inventario en progreso.',
+      detail: 'Espera a que termine antes de volver a escanear.',
+    });
+  }
+
+  if (!hasSavedAuthState(userId)) {
+    return res.status(400).json({
+      error: 'No existe una sesion persistida.',
+      detail: 'Primero importa o prepara una sesion valida.',
+    });
+  }
+
+  const startedAt = new Date().toISOString();
+  invState.active = true;
+  invState.pagesScanned = 0;
+  invState.cardsFound = 0;
+  invState.startedAt = startedAt;
+  invState.completedAt = null;
+  invState.lastError = null;
+
+  res.json({ ok: true, started: true, startedAt });
+  res.on('finish', () => runInventoryScanInBackground(userId));
+});
+
+async function runCatalogScanInBackground(userId) {
   let browser;
   let context;
+  const state = getCatalogScanState(userId);
 
   try {
-    if (!hasSavedAuthState(userId)) {
-      return res.status(400).json({
-        error: 'No existe una sesion persistida.',
-        detail: 'Primero importa o prepara una sesion valida.',
-      });
-    }
-
+    state.phase = 'launching-browser';
     browser = await launchBrowser();
-    context = await browser.newContext({
-      storageState: getAuthStateFile(userId),
-    });
-
-    const invState = getInventoryScanState(userId);
-    invState.active = true;
-    invState.pagesScanned = 0;
-    invState.cardsFound = 0;
-
+    context = await browser.newContext({ storageState: getAuthStateFile(userId) });
     const page = await context.newPage();
 
-    await page.goto(AUTH_CHECK_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
+    state.phase = 'navigating';
+    await page.goto(PROGRAMS_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    ensureAuthenticatedPage(page);
+
+    state.phase = 'discovering';
+    const discovery = await discoverProgramTargets(context, page);
+    const programs = normalizeCatalogPrograms(
+      (await hydrateMissingProgramTitles(context, filterIgnoredPrograms(discovery.programs)))
+        .filter((program) => !isUntitledProgram(program))
+    );
+
+    state.phase = 'saving';
+    const previousResults = normalizeUntitledPrograms(readScanResults(userId));
+    writeScanResults(userId, { ...previousResults, catalogPrograms: programs });
+  } catch (error) {
+    console.error('[catalog/refresh] Error:', error.message);
+    state.lastError = buildUserFacingError(error);
+  } finally {
+    state.active = false;
+    state.phase = 'idle';
+    state.completedAt = new Date().toISOString();
+    if (context) await context.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
+async function runInventoryScanInBackground(userId) {
+  let browser;
+  let context;
+  const invState = getInventoryScanState(userId);
+
+  try {
+    browser = await launchBrowser();
+    context = await browser.newContext({ storageState: getAuthStateFile(userId) });
+    const page = await context.newPage();
+
+    await page.goto(AUTH_CHECK_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     if (!isAuthenticatedMlbUrl(page.url())) {
       fs.rmSync(getAuthStateFile(userId), { force: true });
-      invState.active = false;
-      return res.status(401).json({
-        error: 'La sesion persistida vencio.',
-        detail: 'auth_state.json ya no es valido. Debes reimportar las cookies.',
-      });
+      invState.lastError = 'La sesion persistida vencio. Debes reimportar las cookies.';
+      return;
     }
 
     const cards = await scanFullInventory(context, page, (pagesScanned, cardsFound) => {
       invState.pagesScanned = pagesScanned;
       invState.cardsFound = cardsFound;
     });
-    invState.active = false;
-    const results = {
-      scannedAt: new Date().toISOString(),
-      total: cards.length,
-      cards,
-    };
 
+    const results = { scannedAt: new Date().toISOString(), total: cards.length, cards };
     writeInventoryResults(userId, results);
     await persistAuthState(context, userId);
-    return res.json(results);
   } catch (error) {
     console.error('[inventory/scan] Error:', error.message);
-    getInventoryScanState(userId).active = false;
-    const expired = isSessionExpiredError(error);
-    if (expired) {
+    if (isSessionExpiredError(error)) {
       fs.rmSync(getAuthStateFile(userId), { force: true });
-      return res.status(401).json({
-        error: 'La sesion expiro durante el escaneo del inventario.',
-        detail: 'Reimporta las cookies y vuelve a intentarlo.',
-      });
+      invState.lastError = 'La sesion expiro durante el escaneo del inventario. Reimporta las cookies.';
+    } else {
+      invState.lastError = buildUserFacingError(error);
     }
-    return res.status(500).json({
-      error: 'No se pudo leer el inventario.',
-      detail: buildUserFacingError(error),
-    });
   } finally {
-    getInventoryScanState(userId).active = false;
-    if (context) {
-      await context.close();
-    }
-
-    if (browser) {
-      await browser.close();
-    }
+    invState.active = false;
+    invState.completedAt = new Date().toISOString();
+    if (context) await context.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
   }
-});
+}
 
 async function runScanInBackground(selectedPrograms, userId) {
   let browser;
@@ -512,15 +561,7 @@ async function runScanInBackground(selectedPrograms, userId) {
   const state = getScanState(userId);
 
   try {
-    state.active = true;
-    state.cancelRequested = false;
     state.phase = 'validating-session';
-    state.totalPrograms = 0;
-    state.completedPrograms = 0;
-    state.currentProgramTitle = '';
-    state.startedAt = new Date().toISOString();
-    state.completedAt = null;
-    state.lastError = null;
 
     browser = await launchBrowser();
     context = await browser.newContext({
