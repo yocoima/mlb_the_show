@@ -772,7 +772,7 @@ async function callGroqApi(apiKey, userPrompt) {
       'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: 'llama-3.1-8b-instant',
       messages: [
         {
           role: 'system',
@@ -800,25 +800,25 @@ async function callGroqApi(apiKey, userPrompt) {
 
 function buildAiSuggestPrompt(missions, cards) {
   const missionsText = missions
-    .slice(0, 80)
+    .slice(0, 50)
     .map((m, i) =>
-      `${i + 1}. [${escapeJsonString(m.programTitle)}] ${escapeJsonString(m.name)}\n   Requisito: ${escapeJsonString(m.description)}\n   Donde jugar: ${escapeJsonString(m.whereToPlay)}\n   Progreso: ${m.current}/${m.target}`
+      `${i + 1}. [${escapeJsonString(m.programTitle)}] ${escapeJsonString(m.name)} | ${escapeJsonString(m.whereToPlay)} | ${m.current}/${m.target} | ${escapeJsonString(m.description)}`
     )
-    .join('\n\n');
+    .join('\n');
 
   const cardsText = cards.length
     ? cards
-        .slice(0, 400)
-        .map((c) => `- ${c.name} (${c.overall || '?'} OVR) ${c.position || ''}${c.team ? ` | ${c.team}` : ''}${c.series ? ` | Serie: ${c.series}` : ''}`)
+        .slice(0, 150)
+        .map((c) => `${c.name} (${c.overall || '?'}) ${c.position || ''}${c.team ? ` ${c.team}` : ''}${c.series ? ` ${c.series}` : ''}`)
         .join('\n')
     : 'Sin inventario escaneado.';
 
   return `Analiza los siguientes objetivos activos de MLB The Show 26 y el inventario de cartas del jugador. Tu objetivo es encontrar las estrategias mas eficientes para avanzar MULTIPLES objetivos en la misma sesion de juego.
 
-OBJETIVOS ACTIVOS (${missions.length} objetivos${missions.length > 80 ? ', mostrando los primeros 80' : ''}):
+OBJETIVOS ACTIVOS (${missions.length} objetivos${missions.length > 50 ? ', mostrando los primeros 50' : ''}):
 ${missionsText}
 
-INVENTARIO DEL JUGADOR (${cards.length} cartas${cards.length > 400 ? ', mostrando las primeras 400' : ''}):
+INVENTARIO DEL JUGADOR (${cards.length} cartas${cards.length > 150 ? ', mostrando las primeras 150' : ''}):
 ${cardsText}
 
 REGLAS DE ANALISIS:
