@@ -784,7 +784,7 @@ async function callGroqApi(apiKey, userPrompt) {
         },
       ],
       temperature: 0.25,
-      max_tokens: 6000,
+      max_tokens: 1500,
       response_format: { type: 'json_object' },
     }),
   });
@@ -800,60 +800,31 @@ async function callGroqApi(apiKey, userPrompt) {
 
 function buildAiSuggestPrompt(missions, cards) {
   const missionsText = missions
-    .slice(0, 50)
+    .slice(0, 20)
     .map((m, i) =>
-      `${i + 1}. [${escapeJsonString(m.programTitle)}] ${escapeJsonString(m.name)} | ${escapeJsonString(m.whereToPlay)} | ${m.current}/${m.target} | ${escapeJsonString(m.description)}`
+      `${i + 1}.[${escapeJsonString(m.programTitle)}]${escapeJsonString(m.name)}|${escapeJsonString(m.whereToPlay)}|${m.current}/${m.target}`
     )
     .join('\n');
 
   const cardsText = cards.length
     ? cards
-        .slice(0, 150)
-        .map((c) => `${c.name} (${c.overall || '?'}) ${c.position || ''}${c.team ? ` ${c.team}` : ''}${c.series ? ` ${c.series}` : ''}`)
+        .slice(0, 50)
+        .map((c) => `${c.name}(${c.overall || '?'})${c.position || ''}${c.team ? ` ${c.team}` : ''}${c.series ? ` ${c.series}` : ''}`)
         .join('\n')
-    : 'Sin inventario escaneado.';
+    : 'Sin inventario.';
 
-  return `Analiza los siguientes objetivos activos de MLB The Show 26 y el inventario de cartas del jugador. Tu objetivo es encontrar las estrategias mas eficientes para avanzar MULTIPLES objetivos en la misma sesion de juego.
+  return `Analiza objetivos de MLB The Show 26 Diamond Dynasty. Encuentra estrategias para avanzar MULTIPLES objetivos en la misma sesion.
 
-OBJETIVOS ACTIVOS (${missions.length} objetivos${missions.length > 50 ? ', mostrando los primeros 50' : ''}):
+OBJETIVOS (${missions.length} total${missions.length > 20 ? ', primeros 20' : ''}):
 ${missionsText}
 
-INVENTARIO DEL JUGADOR (${cards.length} cartas${cards.length > 150 ? ', mostrando las primeras 150' : ''}):
+INVENTARIO (${cards.length} cartas${cards.length > 50 ? ', primeras 50' : ''}):
 ${cardsText}
 
-REGLAS DE ANALISIS:
-1. Agrupa objetivos que se puedan completar en la misma partida porque sus requisitos se solapan (mismo tipo de stat, misma serie de cartas, mismo equipo, etc.)
-2. Los modos de juego recomendados para cada grupo DEBEN aparecer en el "Donde jugar" de TODOS los objetivos del grupo
-3. Recomienda las cartas del inventario que cubran MAS objetivos del grupo. Marca "in_inventory": true si la carta esta en el inventario, false si la sugieres aunque no este
-4. Una carta puede cubrir varios objetivos si cumple multiples requisitos (ej: un Yankees de Serie Spotlight cuenta para objetivos de Yankees Y de Spotlight Y de hitters)
-5. Ordena las recomendaciones de mayor a menor impacto (el grupo con mas objetivos cubiertos primero)
-6. Si no hay cartas en inventario que sirvan, sugiere que carta conseguir (in_inventory: false)
+Agrupa objetivos que se completan en la misma partida. El modo recomendado debe aparecer en "Donde jugar" de todos los objetivos del grupo. Usa cartas del inventario cuando aplique. Ordena por mayor impacto primero.
 
-Responde UNICAMENTE con este JSON valido:
-{
-  "recommendations": [
-    {
-      "missions_covered": ["nombre exacto mision 1", "nombre exacto mision 2"],
-      "programs": ["programa1", "programa2"],
-      "best_modes": ["Conquest", "Mini Seasons"],
-      "recommended_cards": [
-        {
-          "name": "Nombre jugador",
-          "overall": 93,
-          "position": "1B",
-          "team": "Yankees",
-          "series": "Spotlight",
-          "in_inventory": true,
-          "covers_missions_count": 3,
-          "reason": "Es Yankees (Affinity), Spotlight (XP objetivo), y bateador (hit milestone). Un jugador con esta carta en Conquest avanza los 3 objetivos a la vez."
-        }
-      ],
-      "strategy": "Descripcion concisa de la estrategia: que hacer, con que cartas y en que modo."
-    }
-  ],
-  "best_overall_modes": ["Conquest", "Mini Seasons"],
-  "summary": "Resumen ejecutivo: la forma mas eficiente de avanzar todos los objetivos con el inventario actual."
-}`;
+JSON de respuesta (sin texto extra):
+{"recommendations":[{"missions_covered":["mision1","mision2"],"programs":["prog1"],"best_modes":["Conquest"],"recommended_cards":[{"name":"Jugador","overall":93,"position":"1B","team":"Yankees","series":"Spotlight","in_inventory":true,"covers_missions_count":2,"reason":"razon breve"}],"strategy":"que hacer y como"}],"best_overall_modes":["Conquest"],"summary":"resumen breve"}`;
 }
 
 function escapeJsonString(value) {
