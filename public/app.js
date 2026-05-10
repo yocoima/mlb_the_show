@@ -65,14 +65,39 @@ function getUserToken() {
 }
 
 async function apiFetch(url, options = {}) {
-  return fetch(url, {
-    ...options,
-    headers: {
-      ...options.headers,
-      'X-User-Token': getUserToken(),
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        ...options.headers,
+        'X-User-Token': getUserToken(),
+      },
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
+
+let toastTimer = null;
+
+function showToast(message, type = 'info', durationMs = 7000) {
+  const toast = document.getElementById('scan-toast');
+  const toastMsg = document.getElementById('scan-toast-message');
+  toastMsg.textContent = message;
+  toast.className = `scan-toast ${type}`;
+  clearTimeout(toastTimer);
+  if (durationMs > 0) {
+    toastTimer = setTimeout(() => toast.classList.add('hidden'), durationMs);
+  }
+}
+
+document.getElementById('scan-toast-close').addEventListener('click', () => {
+  document.getElementById('scan-toast').classList.add('hidden');
+  clearTimeout(toastTimer);
+});
 
 bootstrap();
 
@@ -263,9 +288,11 @@ refreshProgramsButton.addEventListener('click', async () => {
     await refreshProgramCatalog(false);
     statusNode.textContent = 'Catalogo actualizado.';
     scanDetailNode.textContent = 'Programas disponibles para escanear.';
+    showToast('Catalogo de programas actualizado.', 'success', 6000);
   } catch (error) {
     showError(error.message);
     statusNode.textContent = 'No se pudo actualizar el catalogo.';
+    showToast(error.message, 'error', 0);
     scanDetailNode.textContent = error.message;
   } finally {
     track.classList.remove('indeterminate');
@@ -304,9 +331,11 @@ scanInventoryButton.addEventListener('click', async () => {
     await loadInventory();
     await loadLastScan();
     statusNode.textContent = 'Inventario actualizado.';
+    showToast(`Inventario actualizado: ${finalState.cardsFound || 0} cartas encontradas.`, 'success', 7000);
   } catch (error) {
     showError(error.message);
     statusNode.textContent = 'No se pudo leer el inventario.';
+    showToast(error.message, 'error', 0);
   } finally {
     stopInventoryStatusPolling();
     setBusyState(false);
@@ -389,20 +418,25 @@ async function refreshProgramCatalog() {
   renderProgramSelector(programCatalog);
 }
 
-async function pollUntilDone(statusUrl, intervalMs, onTick) {
+async function pollUntilDone(statusUrl, intervalMs, onTick, maxNetworkErrors = 6) {
   return new Promise((resolve, reject) => {
+    let networkErrors = 0;
     const timer = setInterval(async () => {
       try {
         const response = await apiFetch(statusUrl);
         const state = await response.json();
+        networkErrors = 0;
         if (onTick) onTick(state);
         if (!state.active && state.completedAt) {
           clearInterval(timer);
           resolve(state);
         }
       } catch (err) {
-        clearInterval(timer);
-        reject(err);
+        networkErrors++;
+        if (networkErrors >= maxNetworkErrors) {
+          clearInterval(timer);
+          reject(new Error('No se pudo contactar el servidor despues de varios intentos. Verifica tu conexion.'));
+        }
       }
     }, intervalMs);
   });
@@ -935,8 +969,10 @@ async function refreshScanStatus() {
           if (!isSoftWarning) {
             scanDetailNode.textContent = payload.lastError;
           }
+          showToast(payload.lastError, isSoftWarning ? 'warning' : 'error', isSoftWarning ? 8000 : 0);
         } else {
           statusNode.textContent = 'Escaneo completado.';
+          showToast('Escaneo completado correctamente.', 'success', 8000);
         }
 
         await loadLastScan();
