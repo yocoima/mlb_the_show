@@ -1034,6 +1034,11 @@ async function discoverProgramTargets(context, rootPage) {
           if (!programMap.has(item.url)) {
             programMap.set(item.url, buildProgramMetadata(item, currentUrl, pageMeta));
           }
+          // Also recurse into program_view pages so hub pages (like XP Path)
+          // yield their inner sub-program links.
+          if (!visited.has(item.url)) {
+            toVisit.push(item.url);
+          }
           continue;
         }
 
