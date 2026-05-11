@@ -42,6 +42,111 @@ body::before {
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.6), transparent);
 }
 
+.profile-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(3, 10, 20, 0.84);
+  backdrop-filter: blur(10px);
+}
+
+.profile-gate.hidden {
+  display: none;
+}
+
+.profile-gate-card {
+  width: min(460px, 100%);
+  border: 1px solid rgba(158, 178, 207, 0.18);
+  border-radius: 18px;
+  padding: 24px;
+  background: rgba(8, 18, 34, 0.96);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.42);
+}
+
+.profile-gate-card h2 {
+  margin: 4px 0 0;
+  font-size: 1.5rem;
+}
+
+.profile-gate-copy,
+.profile-gate-help {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.profile-gate-copy {
+  margin: 10px 0 18px;
+}
+
+.profile-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.profile-mode-tab {
+  border: 1px solid rgba(158, 178, 207, 0.2);
+  border-radius: 999px;
+  padding: 10px 12px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.profile-mode-tab.active {
+  border-color: rgba(77, 182, 255, 0.4);
+  color: var(--text);
+  background: rgba(77, 182, 255, 0.14);
+}
+
+.profile-gate-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text);
+  font-weight: 800;
+}
+
+.profile-gate-input {
+  width: 100%;
+  border: 1px solid rgba(158, 178, 207, 0.22);
+  border-radius: 14px;
+  padding: 13px 14px;
+  color: var(--text);
+  background: rgba(3, 10, 20, 0.68);
+  font: 700 1rem/1.35 Consolas, Monaco, monospace;
+}
+
+.profile-gate-input:focus {
+  outline: 1px solid rgba(77, 182, 255, 0.5);
+}
+
+.profile-gate-help {
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+}
+
+.profile-gate-error {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.profile-gate-error.hidden {
+  display: none;
+}
+
+.profile-gate-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
 .shell {
   width: min(1120px, calc(100% - 32px));
   margin: 0 auto;
@@ -132,6 +237,55 @@ body::before {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 16px;
+}
+
+.profile-share-panel {
+  margin-top: 14px;
+}
+
+.profile-share-panel summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.profile-token-row,
+.profile-link-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.profile-token-row input,
+.profile-link-row input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid rgba(158, 178, 207, 0.2);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: 700 0.82rem/1.35 Consolas, Monaco, monospace;
+  color: var(--text);
+  background: rgba(3, 10, 20, 0.56);
+}
+
+.profile-token-row input:focus,
+.profile-link-row input:focus {
+  outline: 1px solid rgba(77, 182, 255, 0.5);
+}
+
+.profile-token-row .ghost-button {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+
+.profile-share-status {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
 }
 
 .scan-status-panel {

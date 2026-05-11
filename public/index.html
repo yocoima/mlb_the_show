@@ -13,6 +13,28 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <div id="profile-gate" class="profile-gate hidden" role="dialog" aria-modal="true" aria-labelledby="profile-gate-title">
+      <div class="profile-gate-card">
+        <p class="panel-label">Perfil de la app</p>
+        <h2 id="profile-gate-title">Elige como entrar</h2>
+        <p class="profile-gate-copy">Tu usuario apunta a tus resultados, inventario y sesion guardada en este servidor.</p>
+
+        <div class="profile-mode-tabs" role="tablist" aria-label="Tipo de ingreso">
+          <button id="profile-create-tab" class="profile-mode-tab active" type="button">Primera vez</button>
+          <button id="profile-login-tab" class="profile-mode-tab" type="button">Ya tengo usuario</button>
+        </div>
+
+        <label class="profile-gate-label" for="profile-username-input">Usuario</label>
+        <input id="profile-username-input" class="profile-gate-input" type="text" autocomplete="username" spellcheck="false" placeholder="ejemplo: mi_usuario" />
+        <p id="profile-gate-help" class="profile-gate-help">Crea un usuario unico. Si este navegador ya tenia resultados, se asociaran a ese usuario.</p>
+        <p id="profile-gate-error" class="profile-gate-error hidden"></p>
+
+        <div class="profile-gate-actions">
+          <button id="profile-submit-button" class="secondary-button" type="button">Crear usuario</button>
+        </div>
+      </div>
+    </div>
+
     <main class="shell">
       <section class="hero">
         <p class="eyebrow">Diamond Dynasty</p>
@@ -30,15 +52,18 @@
             <div class="workflow-actions">
               <button id="import-button" class="secondary-button">Importar sesion</button>
               <button id="reset-button" class="ghost-button">Reiniciar sesion</button>
-              <button id="share-link-button" class="ghost-button">Copiar enlace para celular</button>
+              <button id="share-link-button" class="ghost-button">Compartir perfil</button>
             </div>
-            <details style="margin-top:0.75rem">
-              <summary style="cursor:pointer;font-size:0.85rem;color:var(--text-muted,#888)">Token de dispositivo</summary>
-              <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center;flex-wrap:wrap">
-                <input id="token-display" type="text" readonly style="flex:1;min-width:0;font-family:monospace;font-size:0.8rem" />
-                <button id="token-apply-button" class="ghost-button" style="white-space:nowrap">Usar este token</button>
+            <details class="profile-share-panel">
+              <summary>Perfil compartido</summary>
+              <div class="profile-token-row">
+                <input id="token-display" type="text" autocomplete="off" spellcheck="false" />
+                <button id="token-apply-button" class="ghost-button">Usar token</button>
               </div>
-              <p style="font-size:0.78rem;color:var(--text-muted,#888);margin-top:0.4rem">Pega aqui el token del PC para sincronizar este dispositivo. O copia el tuyo para usarlo en otro lugar.</p>
+              <div class="profile-link-row">
+                <input id="share-link-output" type="text" readonly autocomplete="off" spellcheck="false" />
+              </div>
+              <p id="share-link-status" class="profile-share-status">Pega aqui el token del PC o comparte el enlace para abrir este mismo perfil en otro dispositivo.</p>
             </details>
           </article>
 

@@ -14,6 +14,8 @@ const scanInventoryButton = document.getElementById('scan-inventory-button');
 const shareLinkButton = document.getElementById('share-link-button');
 const tokenDisplay = document.getElementById('token-display');
 const tokenApplyButton = document.getElementById('token-apply-button');
+const shareLinkOutput = document.getElementById('share-link-output');
+const shareLinkStatus = document.getElementById('share-link-status');
 const selectAllButton = document.getElementById('select-all-button');
 const clearSelectionButton = document.getElementById('clear-selection-button');
 const sessionInput = document.getElementById('session-input');
@@ -30,6 +32,13 @@ const sessionStateNode = document.getElementById('session-state');
 const sessionCheckedAtNode = document.getElementById('session-checked-at');
 const programSelectorNode = document.getElementById('program-selector');
 const missionsGroupsNode = document.getElementById('missions-groups');
+const profileGate = document.getElementById('profile-gate');
+const profileCreateTab = document.getElementById('profile-create-tab');
+const profileLoginTab = document.getElementById('profile-login-tab');
+const profileUsernameInput = document.getElementById('profile-username-input');
+const profileGateHelp = document.getElementById('profile-gate-help');
+const profileGateError = document.getElementById('profile-gate-error');
+const profileSubmitButton = document.getElementById('profile-submit-button');
 
 let programCatalog = [];
 let selectedProgramUrls = new Set();
@@ -40,9 +49,11 @@ let groupedCatalogCache = [];
 let groupedMissionCache = [];
 let waitingForScanCompletion = false;
 let currentScanStartedAt = null;
+let profileMode = 'create';
 cancelScanButton.disabled = true;
+const PROFILE_USERNAME_KEY = 'mlb_profile_username';
 
-function getUserToken() {
+function applyTokenFromUrl() {
   const urlToken = new URLSearchParams(window.location.search).get('token');
   if (urlToken && /^[a-zA-Z0-9_-]{2,50}$/.test(urlToken)) {
     localStorage.setItem('mlb_user_token', urlToken);
@@ -50,9 +61,18 @@ function getUserToken() {
     clean.searchParams.delete('token');
     window.history.replaceState({}, '', clean.toString());
   }
+}
 
-  let token = localStorage.getItem('mlb_user_token');
-  if (!token || !/^[a-zA-Z0-9_-]{2,50}$/.test(token)) {
+function getStoredUserToken() {
+  applyTokenFromUrl();
+  const token = localStorage.getItem('mlb_user_token');
+  return token && /^[a-zA-Z0-9_-]{2,50}$/.test(token) ? token : null;
+}
+
+function getUserToken() {
+  let token = getStoredUserToken();
+
+  if (!token) {
     token = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
       : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -99,7 +119,105 @@ document.getElementById('scan-toast-close').addEventListener('click', () => {
   clearTimeout(toastTimer);
 });
 
-bootstrap();
+async function initializeProfile() {
+  applyTokenFromUrl();
+
+  const storedToken = getStoredUserToken();
+  const storedUsername = localStorage.getItem(PROFILE_USERNAME_KEY);
+  if (storedToken && storedUsername) {
+    syncProfileShareFields();
+    return;
+  }
+
+  if (storedToken) {
+    try {
+      const response = await fetch('/api/profile/current', {
+        headers: { 'X-User-Token': storedToken },
+      });
+      const payload = await response.json();
+      if (payload?.username) {
+        localStorage.setItem(PROFILE_USERNAME_KEY, payload.username);
+        syncProfileShareFields();
+        return;
+      }
+    } catch {
+      // Fall through to the profile gate.
+    }
+  }
+
+  await showProfileGate();
+  syncProfileShareFields();
+}
+
+function setProfileMode(mode) {
+  profileMode = mode;
+  const isCreate = mode === 'create';
+  profileCreateTab.classList.toggle('active', isCreate);
+  profileLoginTab.classList.toggle('active', !isCreate);
+  profileSubmitButton.textContent = isCreate ? 'Crear usuario' : 'Entrar';
+  profileGateHelp.textContent = isCreate
+    ? 'Crea un usuario unico. Si este navegador ya tenia resultados, se asociaran a ese usuario.'
+    : 'Ingresa tu usuario para abrir este mismo perfil en este dispositivo.';
+  profileGateError.classList.add('hidden');
+  profileGateError.textContent = '';
+  profileUsernameInput.focus();
+}
+
+function showProfileGate() {
+  return new Promise((resolve) => {
+    profileGate.classList.remove('hidden');
+    setProfileMode('create');
+
+    const submit = async () => {
+      const username = profileUsernameInput.value.trim().toLowerCase();
+      profileGateError.classList.add('hidden');
+      profileGateError.textContent = '';
+      profileSubmitButton.disabled = true;
+      profileSubmitButton.textContent = profileMode === 'create' ? 'Creando...' : 'Entrando...';
+
+      try {
+        const body = { username };
+        const existingToken = getStoredUserToken();
+        if (profileMode === 'create' && existingToken) {
+          body.token = existingToken;
+        }
+
+        const response = await fetch(`/api/profile/${profileMode === 'create' ? 'create' : 'login'}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json();
+
+        if (!response.ok) {
+          throw new Error(payload.detail || payload.error || 'Error desconocido');
+        }
+
+        localStorage.setItem('mlb_user_token', payload.token);
+        localStorage.setItem(PROFILE_USERNAME_KEY, payload.username);
+        profileGate.classList.add('hidden');
+        resolve();
+      } catch (error) {
+        profileGateError.textContent = error.message;
+        profileGateError.classList.remove('hidden');
+      } finally {
+        profileSubmitButton.disabled = false;
+        profileSubmitButton.textContent = profileMode === 'create' ? 'Crear usuario' : 'Entrar';
+      }
+    };
+
+    profileCreateTab.onclick = () => setProfileMode('create');
+    profileLoginTab.onclick = () => setProfileMode('login');
+    profileSubmitButton.onclick = submit;
+    profileUsernameInput.onkeydown = (event) => {
+      if (event.key === 'Enter') {
+        submit();
+      }
+    };
+  });
+}
+
+initializeProfile().then(() => bootstrap());
 
 async function bootstrap() {
   await Promise.all([refreshSessionStatus(), loadLastScan(), refreshProgramCatalog(), loadInventory()]);
@@ -236,30 +354,63 @@ resetButton.addEventListener('click', async () => {
   }
 });
 
-tokenDisplay.value = getUserToken();
+function buildShareUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.set('token', getUserToken());
+  return url.toString();
+}
+
+function syncProfileShareFields() {
+  tokenDisplay.value = getUserToken();
+  shareLinkOutput.value = buildShareUrl();
+}
+
+syncProfileShareFields();
 tokenDisplay.addEventListener('focus', () => tokenDisplay.select());
+shareLinkOutput.addEventListener('focus', () => shareLinkOutput.select());
 
 tokenApplyButton.addEventListener('click', () => {
   const val = tokenDisplay.value.trim();
   if (!/^[a-zA-Z0-9_-]{2,50}$/.test(val)) {
-    alert('Token invalido. Solo letras, numeros, guiones y guiones bajos (2-50 caracteres).');
+    shareLinkStatus.textContent = 'Token invalido. Usa solo letras, numeros, guiones y guiones bajos.';
+    shareLinkStatus.style.color = 'var(--danger)';
     return;
   }
   localStorage.setItem('mlb_user_token', val);
+  localStorage.removeItem(PROFILE_USERNAME_KEY);
   window.location.reload();
 });
 
-shareLinkButton.addEventListener('click', () => {
-  const token = getUserToken();
-  const url = new URL(window.location.href);
-  url.searchParams.set('token', token);
-  navigator.clipboard.writeText(url.toString()).then(() => {
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+
+  shareLinkOutput.focus();
+  shareLinkOutput.select();
+  return document.execCommand?.('copy') || false;
+}
+
+shareLinkButton.addEventListener('click', async () => {
+  const shareUrl = buildShareUrl();
+  shareLinkOutput.value = shareUrl;
+  shareLinkOutput.focus();
+  shareLinkOutput.select();
+
+  try {
+    const copied = await copyText(shareUrl);
     const original = shareLinkButton.textContent;
-    shareLinkButton.textContent = 'Enlace copiado!';
+    shareLinkButton.textContent = copied ? 'Enlace copiado!' : 'Enlace seleccionado';
+    shareLinkStatus.textContent = copied
+      ? 'Enlace copiado. Abrelo en el celular para usar este mismo perfil.'
+      : 'No se pudo copiar automaticamente. El enlace quedo seleccionado para copiarlo manualmente.';
+    shareLinkStatus.style.color = 'var(--muted)';
     setTimeout(() => { shareLinkButton.textContent = original; }, 2000);
-  }).catch(() => {
-    prompt('Copia este enlace y abrelo en tu celular:', url.toString());
-  });
+  } catch {
+    shareLinkStatus.textContent = 'No se pudo copiar automaticamente. El enlace quedo seleccionado para copiarlo manualmente.';
+    shareLinkStatus.style.color = 'var(--muted)';
+  }
 });
 
 refreshProgramsButton.addEventListener('click', async () => {
@@ -268,8 +419,9 @@ refreshProgramsButton.addEventListener('click', async () => {
   statusNode.textContent = 'Actualizando catalogo de programas...';
   scanDetailNode.textContent = 'Descubriendo programas y grupos disponibles.';
   const track = scanProgressBarNode.parentElement;
-  track.classList.add('indeterminate');
-  scanProgressLabelNode.textContent = '...';
+  track.classList.remove('indeterminate');
+  scanProgressBarNode.style.width = '0%';
+  scanProgressLabelNode.textContent = '0%';
   scanProgressLabelNode.classList.add('active');
 
   try {
@@ -279,11 +431,15 @@ refreshProgramsButton.addEventListener('click', async () => {
       throw new Error(startPayload.detail || startPayload.error || 'Error desconocido');
     }
 
-    await pollUntilDone(
+    const finalState = await pollUntilDone(
       '/api/programs/catalog/refresh-status',
       1500,
-      (st) => { scanDetailNode.textContent = `Descubriendo catalogo (fase: ${st.phase || '...'})...`; }
+      updateCatalogProgress
     );
+
+    if (finalState.lastError) {
+      throw new Error(finalState.lastError);
+    }
 
     await refreshProgramCatalog(false);
     statusNode.textContent = 'Catalogo actualizado.';
@@ -982,6 +1138,39 @@ async function refreshScanStatus() {
   } catch {
     // Ignore transient polling errors.
   }
+}
+
+function updateCatalogProgress(payload) {
+  const percent = Math.max(0, Math.min(100, Number(payload?.percent) || 0));
+  const track = scanProgressBarNode.parentElement;
+  track.classList.remove('indeterminate');
+  scanProgressBarNode.style.width = `${percent}%`;
+  scanProgressLabelNode.textContent = payload?.active ? `${percent}%` : '—';
+
+  if (payload?.active) {
+    scanProgressLabelNode.classList.add('active');
+  } else {
+    scanProgressLabelNode.classList.remove('active');
+  }
+
+  const phaseMap = {
+    starting: 'Iniciando actualizacion del catalogo...',
+    navigating: 'Abriendo la pagina de programas...',
+    discovering: 'Descubriendo grupos y programas...',
+    'hydrating-titles': 'Resolviendo nombres de programas...',
+    saving: 'Guardando catalogo actualizado...',
+    idle: 'Catalogo listo.',
+  };
+
+  const phaseText = phaseMap[payload?.phase] || 'Actualizando catalogo...';
+  const discoveryText = payload?.totalDiscoveryPages
+    ? `${payload.visitedDiscoveryPages || 0} de ${payload.totalDiscoveryPages} paginas`
+    : '';
+  const programsText = payload?.totalPrograms
+    ? `${payload.hydratedPrograms || 0} de ${payload.totalPrograms} nombres`
+    : `${payload?.discoveredPrograms || 0} programas encontrados`;
+
+  scanDetailNode.textContent = [phaseText, discoveryText, programsText].filter(Boolean).join(' · ');
 }
 
 function updateScanProgress(payload) {

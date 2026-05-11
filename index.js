@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { chromium } = require('playwright');
 
 const app = express();
@@ -21,6 +22,7 @@ const PROGRAM_DISCOVERY_PATTERNS = [
   '/programs/team_affinity_by_team',
   '/programs/other_programs',
 ];
+const PROFILE_REGISTRY_FILE = path.join(DATA_DIR, 'profiles.json');
 let lastSonyRateLimitAt = 0;
 const scanStates = new Map();
 const inventoryScanStates = new Map();
@@ -45,6 +47,13 @@ function getCatalogScanState(userId) {
     catalogScanStates.set(userId, {
       active: false,
       phase: 'idle',
+      percent: 0,
+      visitedDiscoveryPages: 0,
+      totalDiscoveryPages: 0,
+      discoveredPrograms: 0,
+      hydratedPrograms: 0,
+      totalPrograms: 0,
+      currentUrl: '',
       startedAt: null,
       completedAt: null,
       lastError: null,
@@ -54,6 +63,48 @@ function getCatalogScanState(userId) {
 }
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+
+function readProfileRegistry() {
+  if (!fs.existsSync(PROFILE_REGISTRY_FILE)) {
+    return { profiles: {} };
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(PROFILE_REGISTRY_FILE, 'utf8'));
+    return parsed && typeof parsed === 'object' && parsed.profiles
+      ? parsed
+      : { profiles: {} };
+  } catch {
+    return { profiles: {} };
+  }
+}
+
+function writeProfileRegistry(registry) {
+  fs.writeFileSync(PROFILE_REGISTRY_FILE, JSON.stringify(registry, null, 2));
+}
+
+function normalizeUsername(username) {
+  const normalized = `${username || ''}`.trim().toLowerCase();
+  return /^[a-z0-9_-]{3,30}$/.test(normalized) ? normalized : null;
+}
+
+function normalizeUserToken(token) {
+  const normalized = `${token || ''}`.trim().toLowerCase();
+  return /^[a-zA-Z0-9_-]{2,50}$/.test(normalized) ? normalized : null;
+}
+
+function createUserToken() {
+  return crypto.randomUUID();
+}
+
+function findProfileByToken(registry, token) {
+  const normalizedToken = normalizeUserToken(token);
+  if (!normalizedToken) {
+    return null;
+  }
+
+  return Object.entries(registry.profiles || {}).find(([, profile]) => profile?.token === normalizedToken) || null;
+}
 
 function getUserDir(userId) {
   return path.join(DATA_DIR, 'users', userId);
@@ -93,8 +144,7 @@ function getScanState(userId) {
 }
 
 function getUserId(req) {
-  const token = `${req.headers['x-user-token'] || ''}`.trim();
-  return /^[a-zA-Z0-9_-]{2,50}$/.test(token) ? token.toLowerCase() : null;
+  return normalizeUserToken(req.headers['x-user-token']);
 }
 
 function requireUserId(req, res) {
@@ -115,6 +165,91 @@ app.get('/api/health', (req, res) => {
     ok: true,
     environment: isProduction ? 'production' : 'development',
     timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/profile/current', (req, res) => {
+  const token = getUserId(req);
+  if (!token) {
+    return res.json({ username: null, token: null });
+  }
+
+  const registry = readProfileRegistry();
+  const found = findProfileByToken(registry, token);
+  if (!found) {
+    return res.json({ username: null, token });
+  }
+
+  const [username, profile] = found;
+  return res.json({
+    username,
+    token: profile.token,
+    createdAt: profile.createdAt || null,
+  });
+});
+
+app.post('/api/profile/create', (req, res) => {
+  const username = normalizeUsername(req.body?.username);
+  const requestedToken = normalizeUserToken(req.body?.token);
+
+  if (!username) {
+    return res.status(400).json({
+      error: 'Usuario invalido.',
+      detail: 'Usa 3 a 30 caracteres: letras, numeros, guion o guion bajo.',
+    });
+  }
+
+  const registry = readProfileRegistry();
+  if (registry.profiles[username]) {
+    return res.status(409).json({
+      error: 'Usuario no disponible.',
+      detail: 'Ese usuario ya existe. Ingresa con ese usuario o elige otro nombre.',
+    });
+  }
+
+  const existingTokenOwner = requestedToken ? findProfileByToken(registry, requestedToken) : null;
+  if (existingTokenOwner) {
+    return res.status(409).json({
+      error: 'Perfil ya registrado.',
+      detail: `Ese perfil ya pertenece al usuario ${existingTokenOwner[0]}.`,
+    });
+  }
+
+  const token = requestedToken || createUserToken();
+  registry.profiles[username] = {
+    token,
+    createdAt: new Date().toISOString(),
+  };
+  writeProfileRegistry(registry);
+  ensureUserDir(token);
+
+  return res.json({ ok: true, username, token });
+});
+
+app.post('/api/profile/login', (req, res) => {
+  const username = normalizeUsername(req.body?.username);
+  if (!username) {
+    return res.status(400).json({
+      error: 'Usuario invalido.',
+      detail: 'Usa 3 a 30 caracteres: letras, numeros, guion o guion bajo.',
+    });
+  }
+
+  const registry = readProfileRegistry();
+  const profile = registry.profiles[username];
+  if (!profile?.token) {
+    return res.status(404).json({
+      error: 'Usuario no encontrado.',
+      detail: 'No existe un perfil con ese usuario. Revisa el nombre o crea uno nuevo.',
+    });
+  }
+
+  ensureUserDir(profile.token);
+  return res.json({
+    ok: true,
+    username,
+    token: profile.token,
+    createdAt: profile.createdAt || null,
   });
 });
 
@@ -247,6 +382,13 @@ app.post('/api/programs/catalog/refresh', (req, res) => {
   const startedAt = new Date().toISOString();
   state.active = true;
   state.phase = 'starting';
+  state.percent = 0;
+  state.visitedDiscoveryPages = 0;
+  state.totalDiscoveryPages = 0;
+  state.discoveredPrograms = 0;
+  state.hydratedPrograms = 0;
+  state.totalPrograms = 0;
+  state.currentUrl = '';
   state.startedAt = startedAt;
   state.completedAt = null;
   state.lastError = null;
@@ -477,21 +619,46 @@ async function runCatalogScanInBackground(userId) {
     ensureAuthenticatedPage(page);
 
     state.phase = 'discovering';
-    const discovery = await discoverProgramTargets(context, page);
+    state.percent = 5;
+    const discovery = await discoverProgramTargets(context, page, (progress) => {
+      state.phase = 'discovering';
+      state.visitedDiscoveryPages = progress.visitedPages;
+      state.totalDiscoveryPages = progress.totalPages;
+      state.discoveredPrograms = progress.discoveredPrograms;
+      state.currentUrl = progress.currentUrl;
+      const discoveryPercent = progress.totalPages
+        ? Math.round((progress.visitedPages / progress.totalPages) * 70)
+        : 5;
+      state.percent = Math.max(state.percent || 0, Math.min(70, discoveryPercent));
+    });
+    state.phase = 'hydrating-titles';
+    state.percent = Math.max(state.percent || 0, 72);
     const programs = normalizeCatalogPrograms(
-      (await hydrateMissingProgramTitles(context, filterIgnoredPrograms(discovery.programs)))
+      (await hydrateMissingProgramTitles(context, filterIgnoredPrograms(discovery.programs), (progress) => {
+        state.phase = 'hydrating-titles';
+        state.hydratedPrograms = progress.completedPrograms;
+        state.totalPrograms = progress.totalPrograms;
+        state.currentUrl = progress.currentUrl;
+        const hydrationPercent = progress.totalPrograms
+          ? 72 + Math.round((progress.completedPrograms / progress.totalPrograms) * 23)
+          : 90;
+        state.percent = Math.max(state.percent || 0, Math.min(95, hydrationPercent));
+      }))
         .filter((program) => !isUntitledProgram(program))
     );
 
     state.phase = 'saving';
+    state.percent = 98;
     const previousResults = normalizeUntitledPrograms(readScanResults(userId));
     writeScanResults(userId, { ...previousResults, catalogPrograms: programs });
+    state.percent = 100;
   } catch (error) {
     console.error('[catalog/refresh] Error:', error.message);
     state.lastError = buildUserFacingError(error);
   } finally {
     state.active = false;
     state.phase = 'idle';
+    state.currentUrl = '';
     state.completedAt = new Date().toISOString();
     if (context) await context.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
@@ -998,7 +1165,7 @@ function isAuthenticatedMlbUrl(urlString) {
   }
 }
 
-async function discoverProgramTargets(context, rootPage) {
+async function discoverProgramTargets(context, rootPage, onProgress) {
   const toVisit = [rootPage.url()];
   const visited = new Set();
   const programMap = new Map();
@@ -1012,6 +1179,14 @@ async function discoverProgramTargets(context, rootPage) {
     }
 
     visited.add(currentUrl);
+    if (onProgress) {
+      onProgress({
+        visitedPages: visited.size,
+        totalPages: visited.size + toVisit.length,
+        discoveredPrograms: programMap.size,
+        currentUrl,
+      });
+    }
 
     const page = currentUrl === rootPage.url() ? rootPage : await context.newPage();
 
@@ -1034,17 +1209,20 @@ async function discoverProgramTargets(context, rootPage) {
           if (!programMap.has(item.url)) {
             programMap.set(item.url, buildProgramMetadata(item, currentUrl, pageMeta));
           }
-          // Also recurse into program_view pages so hub pages (like XP Path)
-          // yield their inner sub-program links.
-          if (!visited.has(item.url)) {
-            toVisit.push(item.url);
-          }
           continue;
         }
 
         if (isProgramDiscoveryPage(item.url) && !visited.has(item.url)) {
           toVisit.push(item.url);
         }
+      }
+      if (onProgress) {
+        onProgress({
+          visitedPages: visited.size,
+          totalPages: visited.size + toVisit.length,
+          discoveredPrograms: programMap.size,
+          currentUrl,
+        });
       }
     } finally {
       if (page !== rootPage) {
@@ -1090,9 +1268,10 @@ async function collectProgramLinksFromPage(page) {
         const titleNode =
           anchor.querySelector('.mlb26-program-list-text') ||
           anchor.querySelector('.mlb26-program-list-subtitle') ||
+          anchor.querySelector('.mlb26-program-tile-text') ||
           anchor.querySelector('.sidebar-links-toggle-label') ||
           anchor.querySelector('h1, h2, h3, h4');
-        const title = (titleNode?.textContent || '').replace(/\s+/g, ' ').trim();
+        const title = (titleNode?.textContent || anchor.textContent || '').replace(/\s+/g, ' ').trim();
 
         return {
           url: href,
@@ -1201,7 +1380,7 @@ function buildProgramMetadata(item, sourceUrl, pageMeta) {
 }
 
 function resolveProgramTitle(item, pageMeta) {
-  const rawTitle = `${item?.title || ''}`.trim();
+  const rawTitle = normalizeKnownProgramTitle(`${item?.title || ''}`.trim());
 
   if (rawTitle) {
     return rawTitle;
@@ -1245,16 +1424,34 @@ function normalizeCatalogPrograms(programs, missions = []) {
   return (programs || []).map((program) => {
     const replacement = inferProgramIdentityFromUrlAndMissions(program.url, missions);
     if (!replacement) {
-      return program;
+      return {
+        ...program,
+        title: normalizeKnownProgramTitle(program.title) || program.title,
+        topGroup: normalizeKnownProgramTitle(program.topGroup) || program.topGroup,
+      };
     }
+
+    const specificTitle = normalizeKnownProgramTitle(program.title);
+    const hasSpecificInningTitle = /\b\d+(st|nd|rd|th)\s+inning\s+xp\s+path\b/i.test(specificTitle);
 
     return {
       ...program,
-      title: replacement.title || program.title,
-      topGroup: replacement.topGroup || program.topGroup,
+      title: hasSpecificInningTitle ? specificTitle : replacement.title || specificTitle || program.title,
+      topGroup: hasSpecificInningTitle ? specificTitle : replacement.topGroup || program.topGroup,
       subGroup: replacement.subGroup ?? program.subGroup,
     };
   });
+}
+
+function normalizeKnownProgramTitle(title) {
+  const rawTitle = `${title || ''}`.replace(/\s+/g, ' ').trim();
+  const inningMatch = rawTitle.match(/\b(\d+)(st|nd|rd|th)\s+inning\s+xp\s+path\b/i);
+
+  if (inningMatch) {
+    return `${Number(inningMatch[1])}${inningMatch[2].toLowerCase()} Inning XP Path`;
+  }
+
+  return rawTitle;
 }
 
 function normalizeMissionPrograms(missions, catalogPrograms) {
@@ -1470,12 +1667,28 @@ async function extractProgramTitle(page) {
   });
 }
 
-async function hydrateMissingProgramTitles(context, programs) {
+async function hydrateMissingProgramTitles(context, programs, onProgress) {
   const hydrated = [];
+  const totalPrograms = Array.isArray(programs) ? programs.length : 0;
 
   for (const program of programs || []) {
+    if (onProgress) {
+      onProgress({
+        completedPrograms: hydrated.length,
+        totalPrograms,
+        currentUrl: program.url,
+      });
+    }
+
     if (program?.title && program.title !== 'Programa sin titulo') {
       hydrated.push(program);
+      if (onProgress) {
+        onProgress({
+          completedPrograms: hydrated.length,
+          totalPrograms,
+          currentUrl: program.url,
+        });
+      }
       continue;
     }
 
@@ -1498,6 +1711,14 @@ async function hydrateMissingProgramTitles(context, programs) {
       hydrated.push(program);
     } finally {
       await page.close();
+    }
+
+    if (onProgress) {
+      onProgress({
+        completedPrograms: hydrated.length,
+        totalPrograms,
+        currentUrl: program.url,
+      });
     }
   }
 
