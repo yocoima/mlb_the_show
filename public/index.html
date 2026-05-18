@@ -37,43 +37,99 @@
 
     <main class="shell">
       <section class="hero">
-        <p class="eyebrow">Diamond Dynasty</p>
-        <h1>Scanner de programas para MLB The Show 26</h1>
-        <p class="lede">
-          Importa manualmente una sesion exportada desde tu navegador normal y
-          luego reutilizala para escanear programas desde cualquier dispositivo.
-        </p>
+        <div class="app-header">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <p class="eyebrow">Diamond Dynasty</p>
+            <h1>Scanner '26</h1>
+          </div>
+          <div class="header-actions">
+            <button id="session-badge" class="session-badge session-badge-checking" type="button">
+              <span class="session-dot" aria-hidden="true"></span>
+              <span id="session-badge-text">Comprobando</span>
+            </button>
+            <div class="user-pill" title="Identificador de usuario">
+              <span id="profile-initials" class="user-initials">U</span>
+              <span id="profile-name">usuario</span>
+            </div>
+            <button id="logout-profile-button" class="ghost-button profile-switch-button" type="button">Cambiar usuario</button>
+          </div>
+        </div>
+
+        <article class="dashboard-card">
+          <div class="dashboard-card-head">
+            <div>
+              <p id="session-kicker" class="session-kicker">
+                Sesion
+              </p>
+              <strong id="status">Listo para escanear.</strong>
+              <p id="scan-detail" class="scan-detail">Todavia no hay un escaneo en progreso.</p>
+            </div>
+            <div class="dashboard-meta">
+              <span id="session-checked-at">Pendiente</span>
+              <span id="scan-time">Todavia no ejecutado</span>
+            </div>
+          </div>
+
+          <div class="scan-progress-row">
+            <span>Progreso global</span>
+            <span id="scan-progress-label" class="scan-progress-label">0%</span>
+          </div>
+          <div class="scan-progress-track" aria-hidden="true">
+            <span id="scan-progress-bar"></span>
+          </div>
+
+          <div class="dashboard-stats">
+            <div>
+              <p class="panel-label">Programas</p>
+              <p id="program-total" class="panel-value">0/0</p>
+            </div>
+            <div>
+              <p class="panel-label">Misiones</p>
+              <p id="mission-total" class="panel-value">0</p>
+            </div>
+            <div>
+              <p class="panel-label">Cartas</p>
+              <p id="inventory-total" class="panel-value">0</p>
+            </div>
+          </div>
+
+          <details class="import-panel compact-import">
+            <summary class="import-summary">
+              <div>
+                <p class="panel-label">Paso 1</p>
+                <h2>Importacion manual de cookies</h2>
+              </div>
+              <p class="import-summary-copy">Abrir panel</p>
+            </summary>
+            <div class="import-body">
+              <p class="import-help">
+                Pega aqui un JSON exportado desde tu navegador. Se acepta un arreglo
+                de cookies o un objeto tipo Playwright con `cookies` y `origins`.
+              </p>
+              <textarea
+                id="session-input"
+                class="session-input"
+                spellcheck="false"
+                placeholder='Ejemplo: {"cookies":[{"name":"sid","value":"...","domain":".theshow.com","path":"/"}],"origins":[]}'
+              ></textarea>
+              <div class="import-body-actions">
+                <button id="import-body-button" class="secondary-button">Importar sesion</button>
+                <button id="clear-import-button" class="ghost-button">Limpiar</button>
+                <button id="reset-button" class="ghost-button">Reiniciar sesion</button>
+              </div>
+            </div>
+          </details>
+        </article>
 
         <div class="workflow-grid">
-          <article class="workflow-step">
-            <p class="workflow-step-number">Paso 1</p>
-            <h2>Importar sesion</h2>
-            <p class="workflow-copy">Pega tus cookies una sola vez para crear la sesion reutilizable.</p>
-            <div class="workflow-actions">
-              <button id="import-button" class="secondary-button">Importar sesion</button>
-              <button id="reset-button" class="ghost-button">Reiniciar sesion</button>
-              <button id="share-link-button" class="ghost-button">Compartir perfil</button>
-            </div>
-            <details class="profile-share-panel">
-              <summary>Perfil compartido</summary>
-              <div class="profile-token-row">
-                <input id="token-display" type="text" autocomplete="off" spellcheck="false" />
-                <button id="token-apply-button" class="ghost-button">Usar token</button>
-              </div>
-              <div class="profile-link-row">
-                <input id="share-link-output" type="text" readonly autocomplete="off" spellcheck="false" />
-              </div>
-              <p id="share-link-status" class="profile-share-status">Pega aqui el token del PC o comparte el enlace para abrir este mismo perfil en otro dispositivo.</p>
-            </details>
-          </article>
-
           <article class="workflow-step">
             <p class="workflow-step-number">Paso 2</p>
             <h2>Descubrir contenido</h2>
             <p class="workflow-copy">Actualiza el catalogo cuando MLB agregue programas nuevos o cambien los nombres.</p>
             <div class="workflow-actions">
-              <button id="refresh-programs-button" class="ghost-button">Actualizar catalogo</button>
-              <button id="scan-inventory-button" class="secondary-button">Escanear inventario</button>
+              <button id="refresh-programs-button" class="secondary-button">Actualizar programas</button>
+              <button id="scan-inventory-button" class="secondary-button">Escanear cartas</button>
             </div>
           </article>
 
@@ -84,6 +140,19 @@
             <div class="workflow-actions">
               <button id="scan-button" class="primary-button">Escanear programas</button>
               <button id="cancel-scan-button" class="ghost-button">Detener escaneo</button>
+            </div>
+            <div class="embedded-selector">
+              <div class="embedded-selector-header">
+                <div>
+                  <p class="panel-label">Seleccion</p>
+                  <h3>Programas a escanear</h3>
+                </div>
+                <div class="selector-actions">
+                  <button id="select-all-button" class="ghost-button">Seleccionar todo</button>
+                  <button id="clear-selection-button" class="ghost-button">Limpiar</button>
+                </div>
+              </div>
+              <div id="program-selector" class="program-selector"></div>
             </div>
           </article>
 
@@ -96,103 +165,11 @@
             </div>
           </article>
         </div>
-
-        <div class="scan-status-panel">
-          <div class="scan-status-copy">
-            <strong id="status">Listo para iniciar.</strong>
-            <p id="scan-detail" class="scan-detail">Todavia no hay un escaneo en progreso.</p>
-          </div>
-          <div class="scan-progress-meta">
-            <span id="scan-progress-label" class="scan-progress-label">0%</span>
-          </div>
-        </div>
-        <div class="scan-progress-track" aria-hidden="true">
-          <span id="scan-progress-bar"></span>
-        </div>
       </section>
-
-      <details class="panel import-panel">
-        <summary class="import-summary">
-          <div>
-            <p class="panel-label">Importacion manual</p>
-            <h2>Cookies o storageState</h2>
-          </div>
-          <p class="import-summary-copy">Abrir panel</p>
-        </summary>
-        <div class="import-body">
-          <p class="import-help">
-            Pega aqui un JSON exportado desde tu navegador. Se acepta un arreglo
-            de cookies o un objeto tipo Playwright con `cookies` y `origins`.
-          </p>
-          <textarea
-            id="session-input"
-            class="session-input"
-            spellcheck="false"
-            placeholder='Ejemplo: {"cookies":[{"name":"sid","value":"...","domain":".theshow.com","path":"/"}],"origins":[]}'
-          ></textarea>
-          <div class="import-body-actions">
-            <button id="import-body-button" class="secondary-button">Importar sesion</button>
-            <button id="clear-import-button" class="ghost-button">Limpiar</button>
-          </div>
-        </div>
-      </details>
-
-      <section class="panel summary-panel">
-        <div>
-          <p class="panel-label">Ultimo escaneo</p>
-          <p id="scan-time" class="panel-value">Todavia no ejecutado</p>
-        </div>
-        <div>
-          <p class="panel-label">Misiones detectadas</p>
-          <p id="mission-total" class="panel-value">0</p>
-        </div>
-        <div>
-          <p class="panel-label">Sesion persistida</p>
-          <p id="session-state" class="panel-value">Comprobando...</p>
-        </div>
-        <div>
-          <p class="panel-label">Ultima verificacion</p>
-          <p id="session-checked-at" class="panel-value">Pendiente</p>
-        </div>
-      </section>
-
-      <section class="panel inventory-panel">
-      <div class="table-header">
-        <div>
-          <p class="panel-label">Inventario</p>
-          <h2>Cartas disponibles</h2>
-          <p class="panel-help">
-            Escanea tu inventario para detectar las cartas que tienes y poder recomendarlas luego en las misiones.
-          </p>
-        </div>
-      </div>
-        <div class="inventory-summary">
-          <div>
-            <p class="panel-label">Ultima lectura</p>
-            <p id="inventory-time" class="panel-value">Todavia no ejecutado</p>
-          </div>
-          <div>
-            <p class="panel-label">Cartas detectadas</p>
-            <p id="inventory-total" class="panel-value">0</p>
-          </div>
-        </div>
-      </section>
+      <span id="session-state" class="visually-hidden">Comprobando...</span>
+      <span id="inventory-time" class="visually-hidden">Todavia no ejecutado</span>
 
       <section id="error-banner" class="error-banner hidden"></section>
-
-      <section class="panel selector-panel">
-        <div class="table-header">
-          <div>
-            <p class="panel-label">Seleccion</p>
-            <h2>Programas a escanear</h2>
-          </div>
-          <div class="selector-actions">
-            <button id="select-all-button" class="ghost-button">Seleccionar todo</button>
-            <button id="clear-selection-button" class="ghost-button">Limpiar</button>
-          </div>
-        </div>
-        <div id="program-selector" class="program-selector"></div>
-      </section>
 
       <section class="panel table-panel">
         <div class="table-header">

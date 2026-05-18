@@ -30,6 +30,13 @@ const inventoryTimeNode = document.getElementById('inventory-time');
 const inventoryTotalNode = document.getElementById('inventory-total');
 const sessionStateNode = document.getElementById('session-state');
 const sessionCheckedAtNode = document.getElementById('session-checked-at');
+const sessionBadge = document.getElementById('session-badge');
+const sessionBadgeText = document.getElementById('session-badge-text');
+const sessionKicker = document.getElementById('session-kicker');
+const profileNameNode = document.getElementById('profile-name');
+const profileInitialsNode = document.getElementById('profile-initials');
+const logoutProfileButton = document.getElementById('logout-profile-button');
+const programTotalNode = document.getElementById('program-total');
 const programSelectorNode = document.getElementById('program-selector');
 const missionsGroupsNode = document.getElementById('missions-groups');
 const profileGate = document.getElementById('profile-gate');
@@ -52,6 +59,37 @@ let currentScanStartedAt = null;
 let profileMode = 'create';
 cancelScanButton.disabled = true;
 const PROFILE_USERNAME_KEY = 'mlb_profile_username';
+
+function updateProfileHeader(username = localStorage.getItem(PROFILE_USERNAME_KEY)) {
+  const displayName = username || 'usuario';
+  profileNameNode.textContent = displayName;
+  const initials = displayName
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase();
+  profileInitialsNode.textContent = initials || 'U';
+}
+
+function setSessionBadge(state, text) {
+  sessionBadge.classList.remove('session-badge-active', 'session-badge-expired', 'session-badge-checking');
+  sessionKicker.classList.remove('active', 'expired');
+
+  if (state === 'active') {
+    sessionBadge.classList.add('session-badge-active');
+    sessionKicker.classList.add('active');
+  } else if (state === 'expired') {
+    sessionBadge.classList.add('session-badge-expired');
+    sessionKicker.classList.add('expired');
+  } else {
+    sessionBadge.classList.add('session-badge-checking');
+  }
+
+  sessionBadgeText.textContent = text;
+  sessionKicker.childNodes[sessionKicker.childNodes.length - 1].textContent = ` ${text}`;
+}
 
 function applyTokenFromUrl() {
   const urlToken = new URLSearchParams(window.location.search).get('token');
@@ -119,12 +157,22 @@ document.getElementById('scan-toast-close').addEventListener('click', () => {
   clearTimeout(toastTimer);
 });
 
+logoutProfileButton.addEventListener('click', () => {
+  localStorage.removeItem('mlb_user_token');
+  localStorage.removeItem(PROFILE_USERNAME_KEY);
+  const clean = new URL(window.location.href);
+  clean.searchParams.delete('token');
+  window.history.replaceState({}, '', clean.toString());
+  window.location.reload();
+});
+
 async function initializeProfile() {
   applyTokenFromUrl();
 
   const storedToken = getStoredUserToken();
   const storedUsername = localStorage.getItem(PROFILE_USERNAME_KEY);
   if (storedToken && storedUsername) {
+    updateProfileHeader(storedUsername);
     syncProfileShareFields();
     return;
   }
@@ -137,6 +185,7 @@ async function initializeProfile() {
       const payload = await response.json();
       if (payload?.username) {
         localStorage.setItem(PROFILE_USERNAME_KEY, payload.username);
+        updateProfileHeader(payload.username);
         syncProfileShareFields();
         return;
       }
@@ -146,6 +195,7 @@ async function initializeProfile() {
   }
 
   await showProfileGate();
+  updateProfileHeader();
   syncProfileShareFields();
 }
 
@@ -195,6 +245,7 @@ function showProfileGate() {
 
         localStorage.setItem('mlb_user_token', payload.token);
         localStorage.setItem(PROFILE_USERNAME_KEY, payload.username);
+        updateProfileHeader(payload.username);
         profileGate.classList.add('hidden');
         resolve();
       } catch (error) {
@@ -272,8 +323,19 @@ async function doImportSession() {
   }
 }
 
-importButton.addEventListener('click', doImportSession);
+if (importButton) {
+  importButton.addEventListener('click', () => {
+    const panel = document.querySelector('.compact-import');
+    if (!sessionInput.value.trim() && panel) {
+      panel.open = true;
+      sessionInput.focus();
+      return;
+    }
+    doImportSession();
+  });
+}
 importBodyButton.addEventListener('click', doImportSession);
+sessionBadge.addEventListener('click', refreshSessionStatus);
 clearImportButton.addEventListener('click', () => {
   sessionInput.value = '';
   sessionInput.focus();
@@ -361,25 +423,32 @@ function buildShareUrl() {
 }
 
 function syncProfileShareFields() {
+  if (!tokenDisplay || !shareLinkOutput) return;
   tokenDisplay.value = getUserToken();
   shareLinkOutput.value = buildShareUrl();
 }
 
 syncProfileShareFields();
-tokenDisplay.addEventListener('focus', () => tokenDisplay.select());
-shareLinkOutput.addEventListener('focus', () => shareLinkOutput.select());
+if (tokenDisplay) {
+  tokenDisplay.addEventListener('focus', () => tokenDisplay.select());
+}
+if (shareLinkOutput) {
+  shareLinkOutput.addEventListener('focus', () => shareLinkOutput.select());
+}
 
-tokenApplyButton.addEventListener('click', () => {
-  const val = tokenDisplay.value.trim();
-  if (!/^[a-zA-Z0-9_-]{2,50}$/.test(val)) {
-    shareLinkStatus.textContent = 'Token invalido. Usa solo letras, numeros, guiones y guiones bajos.';
-    shareLinkStatus.style.color = 'var(--danger)';
-    return;
-  }
-  localStorage.setItem('mlb_user_token', val);
-  localStorage.removeItem(PROFILE_USERNAME_KEY);
-  window.location.reload();
-});
+if (tokenApplyButton) {
+  tokenApplyButton.addEventListener('click', () => {
+    const val = tokenDisplay.value.trim();
+    if (!/^[a-zA-Z0-9_-]{2,50}$/.test(val)) {
+      shareLinkStatus.textContent = 'Token invalido. Usa solo letras, numeros, guiones y guiones bajos.';
+      shareLinkStatus.style.color = 'var(--danger)';
+      return;
+    }
+    localStorage.setItem('mlb_user_token', val);
+    localStorage.removeItem(PROFILE_USERNAME_KEY);
+    window.location.reload();
+  });
+}
 
 async function copyText(text) {
   if (navigator.clipboard?.writeText) {
@@ -392,26 +461,28 @@ async function copyText(text) {
   return document.execCommand?.('copy') || false;
 }
 
-shareLinkButton.addEventListener('click', async () => {
-  const shareUrl = buildShareUrl();
-  shareLinkOutput.value = shareUrl;
-  shareLinkOutput.focus();
-  shareLinkOutput.select();
+if (shareLinkButton) {
+  shareLinkButton.addEventListener('click', async () => {
+    const shareUrl = buildShareUrl();
+    shareLinkOutput.value = shareUrl;
+    shareLinkOutput.focus();
+    shareLinkOutput.select();
 
-  try {
-    const copied = await copyText(shareUrl);
-    const original = shareLinkButton.textContent;
-    shareLinkButton.textContent = copied ? 'Enlace copiado!' : 'Enlace seleccionado';
-    shareLinkStatus.textContent = copied
-      ? 'Enlace copiado. Abrelo en el celular para usar este mismo perfil.'
-      : 'No se pudo copiar automaticamente. El enlace quedo seleccionado para copiarlo manualmente.';
-    shareLinkStatus.style.color = 'var(--muted)';
-    setTimeout(() => { shareLinkButton.textContent = original; }, 2000);
-  } catch {
-    shareLinkStatus.textContent = 'No se pudo copiar automaticamente. El enlace quedo seleccionado para copiarlo manualmente.';
-    shareLinkStatus.style.color = 'var(--muted)';
-  }
-});
+    try {
+      const copied = await copyText(shareUrl);
+      const original = shareLinkButton.textContent;
+      shareLinkButton.textContent = copied ? 'Enlace copiado!' : 'Enlace seleccionado';
+      shareLinkStatus.textContent = copied
+        ? 'Enlace copiado. Abrelo en el celular para usar este mismo perfil.'
+        : 'No se pudo copiar automaticamente. El enlace quedo seleccionado para copiarlo manualmente.';
+      shareLinkStatus.style.color = 'var(--muted)';
+      setTimeout(() => { shareLinkButton.textContent = original; }, 2000);
+    } catch {
+      shareLinkStatus.textContent = 'No se pudo copiar automaticamente. El enlace quedo seleccionado para copiarlo manualmente.';
+      shareLinkStatus.style.color = 'var(--muted)';
+    }
+  });
+}
 
 refreshProgramsButton.addEventListener('click', async () => {
   setBusyState(true);
@@ -546,14 +617,17 @@ async function refreshSessionStatus() {
     if (!payload.hasSavedAuthState) {
       sessionStateNode.textContent = 'No existe auth_state.json';
       sessionCheckedAtNode.textContent = formatDate(payload.checkedAt) || 'Pendiente';
+      setSessionBadge('expired', 'Sesion vencida');
       return;
     }
 
     sessionStateNode.textContent = payload.authenticated ? 'Activa' : 'Vencida o invalida';
     sessionCheckedAtNode.textContent = formatDate(payload.checkedAt) || 'Sin fecha';
+    setSessionBadge(payload.authenticated ? 'active' : 'expired', payload.authenticated ? 'Sesion activa' : 'Sesion vencida');
   } catch (error) {
     sessionStateNode.textContent = 'No se pudo verificar';
     sessionCheckedAtNode.textContent = 'Error';
+    setSessionBadge('expired', 'Sin verificar');
   }
 }
 
@@ -570,6 +644,8 @@ async function refreshProgramCatalog() {
   programCatalog = payload.programs?.length ? payload.programs : lastScanPayload.catalogPrograms || [];
   const availableUrls = new Set(programCatalog.map((program) => program.url));
   selectedProgramUrls = new Set(Array.from(selectedProgramUrls).filter((url) => availableUrls.has(url)));
+  const visitedTotal = lastScanPayload.programsVisited || 0;
+  programTotalNode.textContent = programCatalog.length ? `${visitedTotal}/${programCatalog.length}` : String(visitedTotal);
 
   renderProgramSelector(programCatalog);
 }
@@ -608,6 +684,7 @@ function applyScanPayload(payload) {
 
   missionTotalNode.textContent = String(payload?.total || missions.length || 0);
   scanTimeNode.textContent = payload?.scannedAt ? formatDate(payload.scannedAt) : 'Todavia no ejecutado';
+  updateDashboardProgress(payload, missions, catalogPrograms);
 
   if (catalogPrograms.length) {
     programCatalog = catalogPrograms;
@@ -617,6 +694,22 @@ function applyScanPayload(payload) {
   }
 
   renderMissionGroups(missions);
+}
+
+function updateDashboardProgress(payload, missions, catalogPrograms) {
+  const totalMissions = payload?.total || missions.length || 0;
+  const completedMissions = missions.filter((mission) => Number(mission.current || 0) >= Number(mission.target || 0)).length;
+  const percent = totalMissions ? Math.round((completedMissions / totalMissions) * 100) : 0;
+  const catalogTotal = catalogPrograms.length || programCatalog.length || 0;
+  const visitedTotal = payload?.programsVisited || 0;
+
+  if (!scanStatusTimer) {
+    scanProgressBarNode.style.width = `${percent}%`;
+    scanProgressLabelNode.textContent = `${percent}%`;
+    scanProgressLabelNode.classList.toggle('active', percent > 0);
+  }
+
+  programTotalNode.textContent = catalogTotal ? `${visitedTotal}/${catalogTotal}` : String(visitedTotal || 0);
 }
 
 function renderProgramSelector(programs) {
@@ -1037,7 +1130,7 @@ function groupProgramMissionsByObjective(missions) {
 }
 
 function setBusyState(isLoading) {
-  importButton.disabled = isLoading;
+  if (importButton) importButton.disabled = isLoading;
   importBodyButton.disabled = isLoading;
   clearImportButton.disabled = isLoading;
   scanButton.disabled = isLoading;
