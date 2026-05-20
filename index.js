@@ -1529,7 +1529,7 @@ function hasGenericPxpObjective(mission) {
 }
 
 function isActionableMissionForAi(mission) {
-  return !isNonPlayableMissionForAi(mission) && hasExecutableObjectiveForAi(mission);
+  return !isNonPlayableMissionForAi(mission) && hasAnalysisTextForAi(mission);
 }
 
 function isNonPlayableMissionForAi(mission) {
@@ -1560,6 +1560,10 @@ function hasExecutableObjectiveForAi(mission) {
       /\b(pxp|parallel xp|player xp|win|wins|defeat)\b/.test(text);
   }
   return true;
+}
+
+function hasAnalysisTextForAi(mission) {
+  return Boolean(String(mission.description || mission.name || '').trim());
 }
 
 function hasSpecificPlayerRequirement(mission) {

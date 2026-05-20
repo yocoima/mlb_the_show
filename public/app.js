@@ -1869,7 +1869,7 @@ function buildInternalPlanText(rec) {
 }
 
 function isActionableMissionForAnalysis(mission) {
-  return !isNonPlayableMission(mission) && hasExecutableObjective(mission);
+  return !isNonPlayableMission(mission) && hasAnalysisText(mission);
 }
 
 function isNonPlayableMission(mission) {
@@ -1898,6 +1898,10 @@ function hasExecutableObjective(mission) {
     return hasHittingOrPitchingOrPxpObjective(mission) || /\b(win|wins|defeat)\b/.test(text);
   }
   return true;
+}
+
+function hasAnalysisText(mission) {
+  return Boolean(String(mission.description || mission.name || '').trim());
 }
 
 function hasHittingOrPitchingOrPxpObjective(mission) {
