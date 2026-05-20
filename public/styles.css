@@ -1807,29 +1807,91 @@ td {
   }
 
   .hero {
-    padding-top: 226px;
+    padding-top: 132px;
     padding-bottom: 22px;
   }
 
   .app-header {
     width: min(100% - 20px, 1120px);
-    padding: 14px 16px;
-    grid-template-columns: auto 1fr;
+    gap: 8px;
+    padding: 8px 10px 10px;
+    grid-template-columns: 1fr;
+  }
+
+  .brand-mark,
+  .brand-copy {
+    display: none;
   }
 
   .header-actions {
-    grid-column: 1 / -1;
+    grid-column: auto;
+    flex-wrap: nowrap;
+    gap: 6px;
     justify-content: stretch;
   }
 
   .fixed-progress-strip {
-    gap: 8px 12px;
+    gap: 6px 10px;
+    padding-top: 8px;
   }
 
   .session-badge,
   .user-pill {
-    flex: 1 1 150px;
+    min-width: 0;
+    min-height: 34px;
+    flex: 1 1 0;
     justify-content: center;
+    gap: 6px;
+    padding: 5px 8px;
+    font-size: 0.8rem;
+  }
+
+  .profile-switch-button {
+    min-height: 34px;
+    flex: 0 0 auto;
+    padding: 5px 8px;
+    font-size: 0.78rem;
+  }
+
+  #profile-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .user-initials {
+    width: 24px;
+    height: 24px;
+    font-size: 0.72rem;
+  }
+
+  .session-dot {
+    width: 8px;
+    height: 8px;
+    box-shadow: 0 0 0 4px rgba(139, 152, 170, 0.14);
+  }
+
+  .session-badge-active .session-dot,
+  .session-kicker.active .session-dot {
+    box-shadow: 0 0 0 4px rgba(74, 222, 128, 0.14);
+  }
+
+  .fixed-progress-strip .scan-detail {
+    overflow: hidden;
+    font-size: 0.78rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .scan-progress-label {
+    min-width: 44px;
+    padding: 4px 8px;
+    font-size: 0.78rem;
+  }
+
+  .scan-progress-track {
+    height: 6px;
   }
 
   .dashboard-card {
