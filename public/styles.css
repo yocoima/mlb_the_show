@@ -774,15 +774,13 @@ body::before {
   overflow: hidden;
 }
 
-.embedded-selector,
-.embedded-results {
+.embedded-selector {
   margin-top: 20px;
   border-top: 1px solid rgba(158, 178, 207, 0.14);
   padding-top: 18px;
 }
 
-.embedded-selector-header,
-.embedded-results-header {
+.embedded-selector-header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -790,14 +788,12 @@ body::before {
   margin-bottom: 14px;
 }
 
-.embedded-selector-header h3,
-.embedded-results-header h3 {
+.embedded-selector-header h3 {
   margin: 0;
   font-size: 1.08rem;
 }
 
-.embedded-selector .program-selector,
-.embedded-results .missions-groups {
+.embedded-selector .program-selector {
   padding: 0;
 }
 
@@ -966,9 +962,6 @@ body::before {
 }
 
 .program-option {
-  display: flex;
-  gap: 10px;
-  align-items: start;
   padding: 12px 14px;
   border: 1px solid var(--panel-border);
   border-radius: 10px;
@@ -982,8 +975,99 @@ body::before {
   transform: translateY(-1px);
 }
 
+.program-option-main {
+  display: flex;
+  gap: 10px;
+  align-items: start;
+  cursor: pointer;
+}
+
 .program-option input {
   accent-color: var(--primary);
+}
+
+.program-objectives-empty {
+  margin: 10px 0 0 28px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.program-objectives-preview {
+  margin: 12px 0 0 28px;
+  border-top: 1px solid rgba(158, 178, 207, 0.12);
+  padding-top: 10px;
+}
+
+.program-objectives-preview summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  list-style: none;
+  text-transform: uppercase;
+}
+
+.program-objectives-preview summary::-webkit-details-marker {
+  display: none;
+}
+
+.program-objectives-preview summary strong {
+  min-width: 28px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--text);
+  background: var(--primary-soft);
+  text-align: center;
+}
+
+.program-objective-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.program-objective-item {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.program-objective-item strong {
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.3;
+}
+
+.program-objective-item span,
+.program-objective-item small,
+.program-objectives-more {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.program-objective-progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.program-objective-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--success), var(--primary));
+}
+
+.program-objectives-more {
+  margin: 0;
 }
 
 .selector-empty,

@@ -822,14 +822,17 @@ function renderProgramSelector(programs) {
           subBody.innerHTML = `
             <div class="selector-grid">
               ${subGroup.programs.map((program) => `
-                <label class="program-option">
-                  <input
-                    type="checkbox"
-                    value="${escapeHtml(program.url)}"
-                    ${selectedProgramUrls.has(program.url) ? 'checked' : ''}
-                  />
-                  <span>${escapeHtml(program.title || 'Programa sin titulo')}</span>
-                </label>
+                <div class="program-option">
+                  <label class="program-option-main">
+                    <input
+                      type="checkbox"
+                      value="${escapeHtml(program.url)}"
+                      ${selectedProgramUrls.has(program.url) ? 'checked' : ''}
+                    />
+                    <span>${escapeHtml(program.title || 'Programa sin titulo')}</span>
+                  </label>
+                  ${renderProgramObjectivePreview(program)}
+                </div>
               `).join('')}
             </div>
           `;
@@ -850,11 +853,61 @@ function renderProgramSelector(programs) {
   });
 }
 
+function renderProgramObjectivePreview(program) {
+  const missions = currentMissionPayload.filter((mission) => mission.sourceUrl === program.url);
+  if (!missions.length) {
+    return '<p class="program-objectives-empty">Sin objetivos escaneados todavia.</p>';
+  }
+
+  const active = missions.filter((mission) => {
+    const target = Number(mission.target) || 0;
+    const current = Number(mission.current) || 0;
+    return !target || current < target;
+  });
+  const visibleMissions = (active.length ? active : missions).slice(0, 6);
+  const remaining = Math.max(0, (active.length ? active : missions).length - visibleMissions.length);
+
+  return `
+    <details class="program-objectives-preview">
+      <summary>
+        <span>Objetivos sugeridos</span>
+        <strong>${active.length || missions.length}</strong>
+      </summary>
+      <div class="program-objective-list">
+        ${visibleMissions.map(renderProgramObjectivePreviewItem).join('')}
+        ${remaining ? `<p class="program-objectives-more">+${remaining} objetivo(s) mas en este programa</p>` : ''}
+      </div>
+    </details>
+  `;
+}
+
+function renderProgramObjectivePreviewItem(mission) {
+  const target = Number(mission.target) || 0;
+  const current = Number(mission.current) || 0;
+  const percent = target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0;
+
+  return `
+    <div class="program-objective-item">
+      <strong>${escapeHtml(mission.description || mission.name || 'Objetivo sin requisito')}</strong>
+      <span>${escapeHtml(mission.whereToPlay || 'Sin modo especifico')}</span>
+      <div class="program-objective-progress">
+        <span style="width: ${percent}%"></span>
+      </div>
+      <small>${current} / ${target || '?'} · ${percent}%</small>
+    </div>
+  `;
+}
+
 function getSelectedProgramUrls() {
   return Array.from(selectedProgramUrls);
 }
 
 function renderMissionGroups(missions) {
+  if (!missionsGroupsNode) {
+    if (programCatalog.length) renderProgramSelector(programCatalog);
+    return;
+  }
+
   if (!missions.length) {
     missionsGroupsNode.innerHTML = '<div class="empty-state">No hay objetivos guardados todavia.</div>';
     return;
