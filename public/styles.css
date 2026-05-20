@@ -1538,6 +1538,28 @@ td {
   line-height: 1.4;
 }
 
+.ai-objective-block {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.ai-objective-block strong {
+  display: block;
+  color: var(--text);
+}
+
+.ai-objective-block p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.ai-objective-block ul {
+  margin-top: 8px;
+}
+
 .ai-cards-section {
   padding: 14px 20px;
   border-bottom: 1px solid rgba(180, 120, 255, 0.08);

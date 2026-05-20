@@ -1413,13 +1413,14 @@ function getAiCandidateMissions() {
     const target = Number(mission.target) || 0;
     const current = Number(mission.current) || 0;
     if (target > 0 && current >= target) return false;
+    if (!isActionableMissionForAnalysis(mission)) return false;
     return !selectedUrls.size || selectedUrls.has(mission.sourceUrl);
   });
 
   return missions.length ? missions : currentMissionPayload.filter((mission) => {
     const target = Number(mission.target) || 0;
     const current = Number(mission.current) || 0;
-    return !target || current < target;
+    return (!target || current < target) && isActionableMissionForAnalysis(mission);
   });
 }
 
@@ -1508,7 +1509,7 @@ async function runInternalAnalysis() {
   const selectedMissions = await showAiMissionPicker(getAiCandidateMissions(), {
     label: 'Analisis interno',
     title: 'Selecciona objetivos',
-    copy: 'El informe agrupa solo objetivos jugables y separa colecciones o tareas no jugables.',
+    copy: 'Solo se muestran objetivos jugables con instrucciones ejecutables. Colecciones y objetivos generales no accionables quedan fuera.',
     confirmText: 'Generar informe',
   });
 
@@ -1530,8 +1531,8 @@ function buildInternalObjectiveReport(missions, cards) {
     const current = Number(mission.current) || 0;
     return !target || current < target;
   });
-  const actionable = active.filter((mission) => !isNonPlayableMission(mission));
-  const nonPlayable = active.filter(isNonPlayableMission);
+  const actionable = active.filter(isActionableMissionForAnalysis);
+  const nonPlayable = active.filter((mission) => !isActionableMissionForAnalysis(mission));
   const recommendations = buildInternalRecommendations(actionable, cards);
 
   return { selected: active, actionable, nonPlayable, recommendations };
@@ -1571,6 +1572,7 @@ function buildInternalRecommendations(missions, cards) {
 function buildModeRecommendation(mode, missions, cards) {
   const cardMatches = new Map();
   const missing = [];
+  const objectiveBlocks = buildObjectiveBlocks(missions, cards);
 
   for (const mission of missions) {
     const matches = findCardsForMission(mission, cards);
@@ -1598,6 +1600,7 @@ function buildModeRecommendation(mode, missions, cards) {
     labels: [formatModeKey(mode)],
     modes: [mode],
     missions,
+    objectiveBlocks,
     cards: cardsRanked,
     missing,
   };
@@ -1607,6 +1610,7 @@ function findCardsForMission(mission, cards) {
   const playerName = extractSpecificPlayerName(mission);
   const team = extractRequiredTeam(mission);
   const statType = getMissionStatType(mission);
+  const series = extractRequiredSeries(mission);
 
   let matches = cards.map(normalizeInventoryCard);
 
@@ -1617,6 +1621,10 @@ function findCardsForMission(mission, cards) {
 
   if (team) {
     matches = matches.filter((card) => normalizeText(card.team).includes(normalizeText(team)));
+  }
+
+  if (series) {
+    matches = matches.filter((card) => normalizeText(card.series).includes(normalizeText(series)));
   }
 
   if (statType === 'hitting') {
@@ -1631,6 +1639,10 @@ function findCardsForMission(mission, cards) {
 
   if (!playerName && !team && statType === 'pitching') {
     matches = matches.filter((card) => isPitcherPosition(card.position));
+  }
+
+  if (!playerName && !team && !series && statType === 'general') {
+    return [];
   }
 
   return matches
@@ -1650,9 +1662,11 @@ function buildCardMatchReason(card, missions) {
   const parts = missions.map((mission) => {
     const team = extractRequiredTeam(mission);
     const player = extractSpecificPlayerName(mission);
+    const series = extractRequiredSeries(mission);
     const statType = getMissionStatType(mission);
     if (player) return `Jugador requerido: ${player}`;
     if (team) return `${team} players: ${mission.description || mission.name}`;
+    if (series) return `${series} cards: ${mission.description || mission.name}`;
     if (statType === 'hitting') return `Bateador para: ${mission.description || mission.name}`;
     if (statType === 'pitching') return `Pitcher para: ${mission.description || mission.name}`;
     return mission.description || mission.name;
@@ -1667,7 +1681,7 @@ function renderInternalObjectiveReport(report) {
   internalSummaryBlock.innerHTML = `
     <div class="ai-summary-inner">
       <strong class="ai-summary-label">Resumen interno</strong>
-      <p class="ai-summary-text">${report.actionable.length} objetivos jugables analizados. ${report.nonPlayable.length} objetivo(s) de coleccion o no jugables separados del informe.</p>
+      <p class="ai-summary-text">${report.actionable.length} objetivos jugables analizados en ${report.recommendations.length} plan(es) por modo, requisito y cartas compatibles.</p>
     </div>
   `;
 
@@ -1697,11 +1711,17 @@ function renderInternalRecommendation(rec, index) {
         <div class="ai-rec-count">${rec.missions.length} objetivo${rec.missions.length !== 1 ? 's' : ''}</div>
       </div>
       <div class="ai-strategy">
-        <span class="ai-field-label">Plan</span>
+        <span class="ai-field-label">Plan general</span>
         <p>${escapeHtml(buildInternalPlanText(rec))}</p>
       </div>
+      ${rec.objectiveBlocks?.length ? `
+        <div class="ai-missions-list">
+          <span class="ai-field-label">Bloques de objetivos</span>
+          ${rec.objectiveBlocks.map(renderObjectiveBlock).join('')}
+        </div>
+      ` : ''}
       <div class="ai-missions-list">
-        <span class="ai-field-label">Objetivos que avanzan juntos</span>
+        <span class="ai-field-label">Objetivos cubiertos</span>
         <ul>
           ${rec.missions.map((mission) => `<li>${escapeHtml(`[${mission.programTitle}] ${mission.description || mission.name}`)}</li>`).join('')}
         </ul>
@@ -1730,6 +1750,24 @@ function renderInternalRecommendation(rec, index) {
           </div>
         </div>
       ` : ''}
+    </div>
+  `;
+}
+
+function renderObjectiveBlock(block) {
+  const cardsText = block.cards.length
+    ? `Usa ${block.cards.map(({ card }) => card.name).join(', ')}.`
+    : block.missing.length
+      ? `No detecte en tu inventario: ${block.missing.join(', ')}.`
+      : block.cardInstruction;
+
+  return `
+    <div class="ai-objective-block">
+      <strong>${escapeHtml(block.label)}</strong>
+      <p>${escapeHtml(cardsText)}</p>
+      <ul>
+        ${block.missions.map((mission) => `<li>${escapeHtml(`[${mission.programTitle}] ${mission.description || mission.name}`)}</li>`).join('')}
+      </ul>
     </div>
   `;
 }
@@ -1764,25 +1802,125 @@ function renderNonPlayableObjectives(missions) {
 }
 
 function buildInternalPlanText(rec) {
-  const priorityCards = rec.cards
-    .filter(({ missions }) => missions.length > 1 || missions.some((mission) => extractRequiredTeam(mission) || extractSpecificPlayerName(mission)))
-    .sort((a, b) => cardSpecificityScore(b) - cardSpecificityScore(a) || b.missions.length - a.missions.length || (Number(b.card.overall) || 0) - (Number(a.card.overall) || 0))
+  const blockTexts = (rec.objectiveBlocks || [])
     .slice(0, 4)
-    .map(({ card }) => card.name);
-  const cardText = priorityCards.length ? ` priorizando ${priorityCards.join(', ')}` : '';
-  return `Juega en ${rec.labels.join(', ')}${cardText}. Este grupo comparte modos y los requisitos se pueden avanzar en la misma sesion.`;
+    .map((block) => {
+      const objectiveText = block.missions.length > 1 ? `${block.missions.length} objetivos` : '1 objetivo';
+      const cardNames = block.cards.slice(0, 3).map(({ card }) => card.name);
+      if (cardNames.length) return `${objectiveText} de ${block.label} con ${cardNames.join(', ')}`;
+      if (block.missing.length) return `${objectiveText} de ${block.label}, falta ${block.missing.join(', ')}`;
+      return `${objectiveText} de ${block.label}`;
+    });
+  const details = blockTexts.length ? `: ${blockTexts.join('; ')}` : '';
+  return `Juega en ${rec.labels.join(', ')}${details}. La recomendacion agrupa objetivos que comparten modo y requisitos compatibles.`;
+}
+
+function isActionableMissionForAnalysis(mission) {
+  return !isNonPlayableMission(mission) && hasExecutableObjective(mission);
 }
 
 function isNonPlayableMission(mission) {
-  const text = normalizeText(`${mission.name || ''} ${mission.description || ''} ${mission.objectiveGroup || ''}`);
-  return text.includes('collection') ||
-    text.includes('collect the') ||
+  const name = normalizeText(mission.name || '');
+  const group = normalizeText(mission.objectiveGroup || '');
+  const description = normalizeText(mission.description || '');
+  const text = `${name} ${description} ${group}`;
+  return name.includes('boss collection') ||
+    group.includes('boss collection') ||
+    group === 'inning boss collection' ||
+    description.includes('collect the') ||
+    /\bcollect\s+\d*\s*(?:the\s+)?(?:two\s+)?\w*\s*boss/.test(description) ||
     text.includes('complete a series of missions') ||
     text.includes('complete hits missions') ||
     text.includes('find a repeatable mission') ||
     text.includes('wheel spins') ||
     text.includes('voucher') ||
     text.includes('exchange');
+}
+
+function hasExecutableObjective(mission) {
+  const text = normalizeText(`${mission.name || ''} ${mission.description || ''}`);
+  const hasAction = /\b(tally|record|get|earn|hit|hits|home run|home runs|hr|rbi|run|runs|stolen base|steal|total bases|extra base|strikeout|strikeouts|innings pitched|inning pitched|pxp|parallel xp|player xp|win|wins|defeat)\b/.test(text);
+  if (!hasAction) return false;
+  if (normalizeText(mission.objectiveGroup || '') === 'general') {
+    return hasHittingOrPitchingOrPxpObjective(mission) || /\b(win|wins|defeat)\b/.test(text);
+  }
+  return true;
+}
+
+function hasHittingOrPitchingOrPxpObjective(mission) {
+  const statType = getMissionStatType(mission);
+  const text = normalizeText(`${mission.description || ''} ${mission.name || ''}`);
+  return statType === 'hitting' || statType === 'pitching' || /\b(pxp|parallel xp|player xp)\b/.test(text);
+}
+
+function buildObjectiveBlocks(missions, cards) {
+  const grouped = new Map();
+  for (const mission of missions) {
+    const key = getMissionRequirementKey(mission);
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        key,
+        label: getMissionRequirementLabel(mission),
+        cardInstruction: getMissionCardInstruction(mission),
+        missions: [],
+        cards: [],
+        missing: [],
+      });
+    }
+    grouped.get(key).missions.push(mission);
+  }
+
+  for (const block of grouped.values()) {
+    const cardMap = new Map();
+    for (const mission of block.missions) {
+      const matches = findCardsForMission(mission, cards);
+      if (!matches.length && extractSpecificPlayerName(mission)) {
+        block.missing.push(extractSpecificPlayerName(mission));
+      }
+      for (const card of matches.slice(0, 4)) {
+        const key = normalizeText(`${card.name} ${card.team} ${card.series} ${card.position}`);
+        if (!cardMap.has(key)) cardMap.set(key, { card, missions: [] });
+        cardMap.get(key).missions.push(mission);
+      }
+    }
+    block.cards = Array.from(cardMap.values())
+      .sort((a, b) => b.missions.length - a.missions.length || (Number(b.card.overall) || 0) - (Number(a.card.overall) || 0))
+      .slice(0, 5);
+    block.missing = Array.from(new Set(block.missing));
+  }
+
+  return Array.from(grouped.values())
+    .sort((a, b) => b.missions.length - a.missions.length || b.cards.length - a.cards.length);
+}
+
+function getMissionRequirementKey(mission) {
+  const player = extractSpecificPlayerName(mission);
+  if (player) return `player:${normalizeText(player)}`;
+  const team = extractRequiredTeam(mission);
+  if (team) return `team:${normalizeText(team)}`;
+  const series = extractRequiredSeries(mission);
+  if (series) return `series:${normalizeText(series)}`;
+  return `stat:${getMissionStatType(mission)}`;
+}
+
+function getMissionRequirementLabel(mission) {
+  const player = extractSpecificPlayerName(mission);
+  if (player) return player;
+  const team = extractRequiredTeam(mission);
+  if (team) return `${team} players`;
+  const series = extractRequiredSeries(mission);
+  if (series) return `${series} cards`;
+  const statType = getMissionStatType(mission);
+  if (statType === 'hitting') return 'bateadores elegibles';
+  if (statType === 'pitching') return 'pitchers elegibles';
+  return 'lineup elegible';
+}
+
+function getMissionCardInstruction(mission) {
+  const statType = getMissionStatType(mission);
+  if (statType === 'hitting') return 'Usa tus mejores bateadores elegibles para estos objetivos.';
+  if (statType === 'pitching') return 'Usa tus mejores pitchers elegibles para estos objetivos.';
+  return 'No requiere una carta especifica detectada.';
 }
 
 function normalizeInventoryCard(card) {
@@ -1812,6 +1950,12 @@ function normalizeCardTeamName(value) {
 function extractRequiredTeam(mission) {
   const text = normalizeText(`${mission.description || ''} ${mission.name || ''}`);
   return getTeamNames().find((team) => text.includes(normalizeText(team)));
+}
+
+function extractRequiredSeries(mission) {
+  const text = normalizeText(`${mission.description || ''} ${mission.name || ''}`);
+  const series = ['Jolt', 'Live Series', 'Topps Now', 'Spotlight', 'Awards', 'Breakout', 'Cornerstone'];
+  return series.find((item) => text.includes(normalizeText(item))) || '';
 }
 
 function extractSpecificPlayerName(mission) {

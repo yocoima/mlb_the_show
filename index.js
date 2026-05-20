@@ -921,7 +921,9 @@ app.post('/api/ai-suggest', async (req, res) => {
     const scanResults = normalizeUntitledPrograms(readScanResults(userId));
     const inventory = readInventoryResults(userId);
 
-    const allActiveMissions = dedupeMissions(scanResults.missions || []).filter((m) => (m.current || 0) < (m.target || 0));
+    const allActiveMissions = dedupeMissions(scanResults.missions || [])
+      .filter((m) => (m.current || 0) < (m.target || 0))
+      .filter(isActionableMissionForAi);
     const selectedMissionKeys = Array.isArray(req.body?.missionKeys)
       ? new Set(req.body.missionKeys.map((key) => String(key)))
       : null;
@@ -934,8 +936,8 @@ app.post('/api/ai-suggest', async (req, res) => {
       return res.status(400).json({
         error: 'No hay objetivos activos para analizar.',
         detail: selectedMissionKeys?.size
-          ? 'Los objetivos seleccionados ya no existen o ya fueron completados. Actualiza el escaneo.'
-          : 'Ejecuta un escaneo de programas primero.',
+          ? 'Los objetivos seleccionados ya no existen, ya fueron completados o no tienen una instruccion jugable. Actualiza el escaneo.'
+          : 'Ejecuta un escaneo de programas primero. Las colecciones y objetivos generales no jugables se excluyen del analisis.',
       });
     }
 
@@ -1278,7 +1280,7 @@ function buildAiSuggestPrompt(missions, cards, totalCardsAvailable = cards.lengt
         .join('\n')
     : 'Sin cartas filtradas por requisito.';
 
-  return `Analiza objetivos de MLB The Show 26 Diamond Dynasty. Encuentra estrategias para avanzar MULTIPLES objetivos en la misma sesion.
+  return `Analiza objetivos de MLB The Show 26 Diamond Dynasty. Debes hacer un ANALISIS GLOBAL, no una recomendacion individual por mision. Agrupa todos los objetivos seleccionados en bloques compatibles por modo de juego y requisitos de cartas.
 
 OBJETIVOS (${missions.length} total${missions.length > 20 ? ', primeros 20' : ''}):
 ${missionsText}
@@ -1286,7 +1288,18 @@ ${missionsText}
 INVENTARIO FILTRADO (${cards.length} cartas enviadas de ${totalCardsAvailable} disponibles):
 ${cardsText}
 
-Analiza los objetivos, determina que cartas cumplen con los requisitos de los distintos objetivos, analiza que cartas, requisitos y Where to Play se cruzan entre si para cumplir la mayor cantidad de objetivos en menos juegos. Recomienda SOLO cartas listadas en INVENTARIO FILTRADO. Si un requisito dice "with Twins players", recomienda solo cartas TEAM Twins para ese objetivo; si dice "with Mariners players", recomienda solo cartas TEAM Mariners. Si el requisito pide hits, home runs, RBI o bases robadas, recomienda bateadores y no pitchers. Si el requisito pide Parallel XP con un jugador especifico, recomienda solo ese jugador si aparece en el inventario filtrado; si no aparece, explicalo en strategy y no inventes una carta sustituta. Para cada recommendation, best_modes debe contener solo modos exactos que aparezcan en TODOS los objetivos cubiertos por esa recommendation. No combines dos modos distintos en una frase: "Conquest en 1 vs 1 Ranked" es invalido. Si un objetivo solo tiene Conquest y otro tiene Conquest, Ranked y Events, el modo comun correcto es solo Conquest.
+Reglas:
+- No recomiendes objetivo por objetivo. Cada recommendation debe representar un plan: "para objetivos A/B/C juega X modo con estas cartas; para D/E juega Y modo con estas cartas".
+- missions_covered debe listar todos los objetivos que ese plan avanza juntos.
+- strategy debe explicar el plan general por bloques, no repetir una frase por cada mision.
+- Recomienda SOLO cartas listadas en INVENTARIO FILTRADO.
+- Cada carta recomendada debe estar relacionada con un requisito real de al menos un objetivo cubierto: equipo, jugador, serie, posicion/rol de bateador o pitcher.
+- Si un requisito dice "with Twins players", recomienda solo cartas TEAM Twins para ese objetivo; si dice "with Mariners players", recomienda solo cartas TEAM Mariners.
+- Si el requisito pide hits, home runs, RBI, runs, total bases o bases robadas, recomienda bateadores y no pitchers.
+- Si el requisito pide strikeouts o innings pitched, recomienda pitchers y no bateadores.
+- Si el requisito pide Parallel XP con un jugador especifico, recomienda solo ese jugador si aparece en el inventario filtrado; si no aparece, explicalo en strategy y no inventes una carta sustituta.
+- No incluyas Boss Collection, collections, exchanges, vouchers ni objetivos generales sin accion ejecutable.
+- Para cada recommendation, best_modes debe contener solo modos exactos que aparezcan en TODOS los objetivos cubiertos por esa recommendation. No combines dos modos distintos en una frase: "Conquest en 1 vs 1 Ranked" es invalido. Si un objetivo solo tiene Conquest y otro tiene Conquest, Ranked y Events, el modo comun correcto es solo Conquest.
 
 JSON de respuesta (sin texto extra):
 {"recommendations":[{"missions_covered":["",""],"programs":[""],"best_modes":[""],"recommended_cards":[{"name":"","overall":"","position":"","team":"","series":"","in_inventory":true,"covers_missions_count":"","reason":""}],"strategy":""}],"best_overall_modes":[""],"summary":""}`;
@@ -1513,6 +1526,40 @@ function hasPitchingObjective(mission) {
 function hasGenericPxpObjective(mission) {
   const text = `${mission.description || ''} ${mission.name || ''}`.toLowerCase();
   return (text.includes('parallel xp') || text.includes('pxp')) && !hasSpecificPlayerRequirement(mission);
+}
+
+function isActionableMissionForAi(mission) {
+  return !isNonPlayableMissionForAi(mission) && hasExecutableObjectiveForAi(mission);
+}
+
+function isNonPlayableMissionForAi(mission) {
+  const name = normalizeAiMatchText(mission.name || '');
+  const group = normalizeAiMatchText(mission.objectiveGroup || '');
+  const description = normalizeAiMatchText(mission.description || '');
+  const text = `${name} ${description} ${group}`;
+  return name.includes('boss collection') ||
+    group.includes('boss collection') ||
+    group === 'inning boss collection' ||
+    description.includes('collect the') ||
+    /\bcollect\s+\d*\s*(?:the\s+)?(?:two\s+)?\w*\s*boss/.test(description) ||
+    text.includes('complete a series of missions') ||
+    text.includes('complete hits missions') ||
+    text.includes('find a repeatable mission') ||
+    text.includes('wheel spins') ||
+    text.includes('voucher') ||
+    text.includes('exchange');
+}
+
+function hasExecutableObjectiveForAi(mission) {
+  const text = normalizeAiMatchText(`${mission.name || ''} ${mission.description || ''}`);
+  const hasAction = /\b(tally|record|get|earn|hit|hits|home run|home runs|hr|rbi|run|runs|stolen base|steal|total bases|extra base|strikeout|strikeouts|innings pitched|inning pitched|pxp|parallel xp|player xp|win|wins|defeat)\b/.test(text);
+  if (!hasAction) return false;
+  if (normalizeAiMatchText(mission.objectiveGroup || '') === 'general') {
+    return hasHittingObjective(mission) ||
+      hasPitchingObjective(mission) ||
+      /\b(pxp|parallel xp|player xp|win|wins|defeat)\b/.test(text);
+  }
+  return true;
 }
 
 function hasSpecificPlayerRequirement(mission) {
