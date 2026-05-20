@@ -332,20 +332,48 @@ app.post('/api/import-session', async (req, res) => {
   }
 });
 
-app.get('/api/session-status', (req, res) => {
+app.get('/api/session-status', async (req, res) => {
   const userId = requireUserId(req, res);
   if (!userId) return;
 
   const savedStateExists = hasSavedAuthState(userId);
-  res.json({
-    authenticated: savedStateExists,
-    currentUrl: null,
-    checkedAt: new Date().toISOString(),
-    hasSavedAuthState: savedStateExists,
-    suggestedUserId: null,
-    rateLimited: isSonyRateLimited(),
-    lastSonyRateLimitAt: lastSonyRateLimitAt || null,
-  });
+  if (!savedStateExists) {
+    return res.json({
+      authenticated: false,
+      currentUrl: null,
+      checkedAt: new Date().toISOString(),
+      hasSavedAuthState: false,
+      suggestedUserId: null,
+      rateLimited: isSonyRateLimited(),
+      lastSonyRateLimitAt: lastSonyRateLimitAt || null,
+    });
+  }
+
+  try {
+    const sessionState = await validateSavedSession(userId);
+    res.json({
+      authenticated: sessionState.authenticated,
+      currentUrl: sessionState.currentUrl,
+      checkedAt: sessionState.checkedAt,
+      hasSavedAuthState: hasSavedAuthState(sessionState.detectedUserId || userId),
+      suggestedUserId: sessionState.detectedUserId || null,
+      rateLimited: isSonyRateLimited(),
+      lastSonyRateLimitAt: lastSonyRateLimitAt || null,
+    });
+  } catch (error) {
+    console.error('[session-status] Error:', error.message);
+    res.status(500).json({
+      error: 'No se pudo verificar la sesion.',
+      detail: buildUserFacingError(error),
+      authenticated: false,
+      currentUrl: null,
+      checkedAt: new Date().toISOString(),
+      hasSavedAuthState: hasSavedAuthState(userId),
+      suggestedUserId: null,
+      rateLimited: isSonyRateLimited(),
+      lastSonyRateLimitAt: lastSonyRateLimitAt || null,
+    });
+  }
 });
 
 app.get('/api/programs/catalog', (req, res) => {

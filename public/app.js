@@ -602,6 +602,8 @@ async function loadInventory() {
 }
 
 async function refreshSessionStatus() {
+  setSessionBadge('checking', 'Comprobando');
+
   try {
     const response = await apiFetch('/api/session-status');
     const payload = await response.json();
