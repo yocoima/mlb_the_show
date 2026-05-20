@@ -2,6 +2,10 @@ const importButton = document.getElementById('import-button');
 const importBodyButton = document.getElementById('import-body-button');
 const clearImportButton = document.getElementById('clear-import-button');
 const scanButton = document.getElementById('scan-button');
+const internalAnalyzeButton = document.getElementById('internal-analyze-button');
+const internalPanel = document.getElementById('internal-panel');
+const internalResultsNode = document.getElementById('internal-results');
+const internalSummaryBlock = document.getElementById('internal-summary-block');
 const aiSuggestButton = document.getElementById('ai-suggest-button');
 const aiRegenerateButton = document.getElementById('ai-regenerate-button');
 const aiPanel = document.getElementById('ai-panel');
@@ -43,6 +47,7 @@ const profileSubmitButton = document.getElementById('profile-submit-button');
 let programCatalog = [];
 let selectedProgramUrls = new Set();
 let inventoryPayload = { scannedAt: null, total: 0, cards: [] };
+let currentMissionPayload = [];
 let scanStatusTimer = null;
 let inventoryStatusTimer = null;
 let groupedCatalogCache = [];
@@ -599,8 +604,9 @@ async function pollUntilDone(statusUrl, intervalMs, onTick, maxNetworkErrors = 6
 }
 
 function applyScanPayload(payload) {
-  const missions = payload?.missions || [];
+  const missions = dedupeMissionsForDisplay(payload?.missions || []);
   const catalogPrograms = payload?.catalogPrograms || [];
+  currentMissionPayload = missions;
   if (payload?.inventory) {
     inventoryPayload = payload.inventory;
     renderInventorySummary(payload.inventory);
@@ -617,6 +623,53 @@ function applyScanPayload(payload) {
   }
 
   renderMissionGroups(missions);
+}
+
+function dedupeMissionsForDisplay(missions) {
+  const byKey = new Map();
+  for (const mission of missions) {
+    const normalizedMission = normalizeMissionPresentation(mission);
+    const key = [
+      normalizeMissionDedupeText(normalizedMission.sourceUrl || ''),
+      normalizeMissionDedupeText(normalizedMission.programTitle || ''),
+      normalizeMissionDedupeText(normalizedMission.description || normalizedMission.name || ''),
+      normalizeMissionDedupeText(normalizedMission.whereToPlay || ''),
+      `${normalizedMission.current || 0}/${normalizedMission.target || 0}`,
+    ].join('::');
+    const existing = byKey.get(key);
+    if (!existing || missionSpecificityScore(normalizedMission) > missionSpecificityScore(existing)) {
+      byKey.set(key, normalizedMission);
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+function normalizeMissionPresentation(mission) {
+  const description = String(mission?.description || '');
+  const bossCollectionMatch = description.match(/Collect the two (\d+(?:st|nd|rd|th)) Inning XP Reward Path bosses/i);
+  if (bossCollectionMatch) {
+    return {
+      ...mission,
+      name: `${bossCollectionMatch[1]} Inning Boss Collection`,
+      objectiveGroup: 'Inning Boss Collection',
+    };
+  }
+
+  return mission;
+}
+
+function normalizeMissionDedupeText(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function missionSpecificityScore(mission) {
+  const name = String(mission.name || '').trim();
+  const group = String(mission.objectiveGroup || '').trim();
+  let score = name.length ? 1 : 0;
+  if (name && group && name !== group) score += 3;
+  if (!/\bmissions?\b/i.test(name)) score += 2;
+  if (mission.description && name && !mission.description.includes(name)) score += 1;
+  return score;
 }
 
 function renderProgramSelector(programs) {
@@ -870,29 +923,22 @@ function renderMissionRow(mission) {
           </div>
         </div>
       </td>
-      <td data-label="Sugerencia">${escapeHtml(mission.suggestion || '')}</td>
+      <td data-label="Sugerencia">${escapeHtml(formatInlineSuggestion(mission))}</td>
     </tr>
     ${suggestionDetails}
   `;
 }
 
 function renderCrossProgramHints(mission) {
-  const hints = Array.isArray(mission.crossProgramHints) ? mission.crossProgramHints : [];
-  if (!hints.length) return '';
-  return `
-    <div class="cross-program-hints">
-      <strong>Avanza en paralelo:</strong>
-      <div class="cross-hint-list">
-        ${hints.map((h) => `
-          <span class="cross-hint-chip">
-            <span class="cross-hint-program">${escapeHtml(h.programTitle)}</span>
-            <span class="cross-hint-sep">›</span>
-            <span class="cross-hint-mission">${escapeHtml(h.missionName)}</span>
-          </span>
-        `).join('')}
-      </div>
-    </div>
-  `;
+  return '';
+}
+
+function formatInlineSuggestion(mission) {
+  const suggestion = mission.suggestion || '';
+  if (!suggestion) return '';
+  if (isNonPlayableMission(mission)) return '';
+  if (/Avanza esta mision/i.test(suggestion)) return '';
+  return suggestion;
 }
 
 function renderSuggestionDetails(mission) {
@@ -924,7 +970,6 @@ function renderCardSuggestions(mission) {
             ${escapeHtml(card.name)}
             ${card.position ? ` (${escapeHtml(card.position)})` : ''}
             ${card.series ? ` - ${escapeHtml(card.series)}` : ''}
-            ${card.overlapCount > 1 ? ` - cruza ${card.overlapCount} misiones` : ''}
           </span>
         `).join('')}
       </div>
@@ -1041,6 +1086,7 @@ function setBusyState(isLoading) {
   importBodyButton.disabled = isLoading;
   clearImportButton.disabled = isLoading;
   scanButton.disabled = isLoading;
+  internalAnalyzeButton.disabled = isLoading;
   resetButton.disabled = isLoading;
   refreshProgramsButton.disabled = isLoading;
   scanInventoryButton.disabled = isLoading;
@@ -1062,15 +1108,17 @@ function startScanStatusPolling(scanJustStarted = false) {
   refreshScanStatus();
 }
 
-function stopScanStatusPolling() {
+function stopScanStatusPolling(keepCompleted = false) {
   if (scanStatusTimer) {
     clearInterval(scanStatusTimer);
     scanStatusTimer = null;
   }
   waitingForScanCompletion = false;
   scanProgressBarNode.parentElement.classList.remove('indeterminate');
-  scanProgressBarNode.style.width = '0%';
-  scanProgressLabelNode.textContent = '—';
+  if (!keepCompleted) {
+    scanProgressBarNode.style.width = '0%';
+    scanProgressLabelNode.textContent = '—';
+  }
 }
 
 function startInventoryStatusPolling() {
@@ -1112,10 +1160,10 @@ async function refreshScanStatus() {
     updateScanProgress(payload);
 
     if (waitingForScanCompletion && !payload.active && payload.completedAt) {
-      const completedAfterStart = !currentScanStartedAt || new Date(payload.completedAt) >= new Date(currentScanStartedAt) - 5000;
-      if (completedAfterStart) {
+      const completedAfterStart = !currentScanStartedAt || new Date(payload.completedAt).getTime() >= new Date(currentScanStartedAt).getTime() - 5000;
+      if (completedAfterStart || payload.phase === 'completed') {
         waitingForScanCompletion = false;
-        stopScanStatusPolling();
+        stopScanStatusPolling(true);
         setBusyState(false);
 
         if (payload.lastError) {
@@ -1128,6 +1176,12 @@ async function refreshScanStatus() {
           showToast(payload.lastError, isSoftWarning ? 'warning' : 'error', isSoftWarning ? 8000 : 0);
         } else {
           statusNode.textContent = 'Escaneo completado.';
+          scanDetailNode.textContent = payload.totalPrograms
+            ? `${payload.completedPrograms || payload.totalPrograms} de ${payload.totalPrograms} programas escaneados.`
+            : 'Resultados actualizados correctamente.';
+          scanProgressBarNode.style.width = '100%';
+          scanProgressLabelNode.textContent = '100%';
+          scanProgressLabelNode.classList.add('active');
           showToast('Escaneo completado correctamente.', 'success', 8000);
         }
 
@@ -1203,6 +1257,12 @@ function updateScanProgress(payload) {
   }
 
   if (!payload?.active) {
+    if (payload?.completedAt && !payload?.lastError) {
+      track.classList.remove('indeterminate');
+      scanProgressBarNode.style.width = '100%';
+      scanProgressLabelNode.textContent = '100%';
+      scanProgressLabelNode.classList.add('active');
+    }
     return;
   }
 
@@ -1252,7 +1312,493 @@ function escapeHtml(value) {
 
 // ── Modulo de analisis estrategico con IA ──────────────────────────────────
 
+function getAiCandidateMissions() {
+  const selectedUrls = new Set(getSelectedProgramUrls());
+  const missions = currentMissionPayload.filter((mission) => {
+    const target = Number(mission.target) || 0;
+    const current = Number(mission.current) || 0;
+    if (target > 0 && current >= target) return false;
+    return !selectedUrls.size || selectedUrls.has(mission.sourceUrl);
+  });
+
+  return missions.length ? missions : currentMissionPayload.filter((mission) => {
+    const target = Number(mission.target) || 0;
+    const current = Number(mission.current) || 0;
+    return !target || current < target;
+  });
+}
+
+function getMissionKey(mission) {
+  return [
+    mission.sourceUrl || '',
+    mission.programTitle || '',
+    mission.name || '',
+    mission.description || '',
+  ].join('||');
+}
+
+function showAiMissionPicker(missions, options = {}) {
+  return new Promise((resolve) => {
+    if (!missions.length) {
+      resolve([]);
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'ai-mission-modal';
+    const label = options.label || 'Objetivos para IA';
+    const title = options.title || 'Selecciona que analizar';
+    const copy = options.copy || 'Ya vienen filtrados por los programas marcados en la seleccion principal.';
+    const confirmText = options.confirmText || 'Analizar seleccion';
+    overlay.innerHTML = `
+      <div class="ai-mission-card" role="dialog" aria-modal="true" aria-labelledby="ai-mission-title">
+        <div class="ai-mission-header">
+          <div>
+            <p class="panel-label ai-label">${escapeHtml(label)}</p>
+            <h2 id="ai-mission-title">${escapeHtml(title)}</h2>
+            <p>${escapeHtml(copy)}</p>
+          </div>
+        </div>
+        <div class="ai-mission-tools">
+          <button class="ghost-button" type="button" data-action="all">Seleccionar todo</button>
+          <button class="ghost-button" type="button" data-action="none">Limpiar</button>
+        </div>
+        <div class="ai-mission-list">
+          ${missions.map((mission, index) => `
+            <label class="ai-mission-option">
+              <input type="checkbox" value="${index}" checked />
+              <span>
+                <strong>${escapeHtml(mission.programTitle || 'Programa sin titulo')}</strong>
+                <em>${escapeHtml(mission.description || mission.name || 'Objetivo sin requisito')}</em>
+                <small>${escapeHtml(mission.whereToPlay || '')}</small>
+              </span>
+            </label>
+          `).join('')}
+        </div>
+        <div class="ai-mission-actions">
+          <button class="ghost-button" type="button" data-action="cancel">Cancelar</button>
+          <button class="ai-button" type="button" data-action="confirm">${escapeHtml(confirmText)}</button>
+        </div>
+      </div>
+    `;
+
+    const close = (selected) => {
+      overlay.remove();
+      resolve(selected);
+    };
+
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close(null);
+    });
+
+    overlay.querySelector('[data-action="cancel"]').addEventListener('click', () => close(null));
+    overlay.querySelector('[data-action="all"]').addEventListener('click', () => {
+      overlay.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = true; });
+    });
+    overlay.querySelector('[data-action="none"]').addEventListener('click', () => {
+      overlay.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
+    });
+    overlay.querySelector('[data-action="confirm"]').addEventListener('click', () => {
+      const selected = Array.from(overlay.querySelectorAll('input[type="checkbox"]:checked'))
+        .map((input) => missions[Number(input.value)])
+        .filter(Boolean);
+      close(selected);
+    });
+
+    document.body.appendChild(overlay);
+  });
+}
+
+async function runInternalAnalysis() {
+  const selectedMissions = await showAiMissionPicker(getAiCandidateMissions(), {
+    label: 'Analisis interno',
+    title: 'Selecciona objetivos',
+    copy: 'El informe agrupa solo objetivos jugables y separa colecciones o tareas no jugables.',
+    confirmText: 'Generar informe',
+  });
+
+  if (!selectedMissions) return;
+  if (!selectedMissions.length) {
+    showToast('Selecciona al menos un objetivo para analizar.', 'warning', 5000);
+    return;
+  }
+
+  const report = buildInternalObjectiveReport(selectedMissions, inventoryPayload.cards || []);
+  renderInternalObjectiveReport(report);
+  statusNode.textContent = 'Analisis interno completado.';
+  scanDetailNode.textContent = `${report.actionable.length} objetivos jugables · ${report.recommendations.length} grupo(s) recomendados.`;
+}
+
+function buildInternalObjectiveReport(missions, cards) {
+  const active = missions.filter((mission) => {
+    const target = Number(mission.target) || 0;
+    const current = Number(mission.current) || 0;
+    return !target || current < target;
+  });
+  const actionable = active.filter((mission) => !isNonPlayableMission(mission));
+  const nonPlayable = active.filter(isNonPlayableMission);
+  const recommendations = buildInternalRecommendations(actionable, cards);
+
+  return { selected: active, actionable, nonPlayable, recommendations };
+}
+
+function buildInternalRecommendations(missions, cards) {
+  const modeMap = new Map();
+
+  for (const mission of missions) {
+    const modes = extractModeKeys(mission.whereToPlay);
+    for (const mode of modes) {
+      if (!modeMap.has(mode)) modeMap.set(mode, []);
+      modeMap.get(mode).push(mission);
+    }
+  }
+
+  const byMissionSet = new Map();
+  Array.from(modeMap.entries())
+    .map(([mode, groupedMissions]) => buildModeRecommendation(mode, groupedMissions, cards))
+    .filter((rec) => rec.missions.length >= 2)
+    .forEach((rec) => {
+      const key = rec.missions.map(getMissionKey).sort().join('@@');
+      if (!byMissionSet.has(key)) {
+        byMissionSet.set(key, { ...rec, modes: [rec.mode], labels: [rec.label] });
+      } else {
+        const existing = byMissionSet.get(key);
+        existing.modes.push(rec.mode);
+        existing.labels.push(rec.label);
+      }
+    });
+
+  return Array.from(byMissionSet.values())
+    .sort((a, b) => b.missions.length - a.missions.length || modePriority(a.modes[0]) - modePriority(b.modes[0]))
+    .slice(0, 8);
+}
+
+function buildModeRecommendation(mode, missions, cards) {
+  const cardMatches = new Map();
+  const missing = [];
+
+  for (const mission of missions) {
+    const matches = findCardsForMission(mission, cards);
+    if (!matches.length && extractSpecificPlayerName(mission)) {
+      missing.push({ mission, name: extractSpecificPlayerName(mission) });
+    }
+
+    for (const card of matches.slice(0, 5)) {
+      const key = normalizeText(`${cleanCardName(card.name)} ${card.team} ${card.series} ${card.position}`);
+      if (!cardMatches.has(key)) {
+        cardMatches.set(key, { card, missions: [] });
+      }
+      cardMatches.get(key).missions.push(mission);
+    }
+  }
+
+  const cardsRanked = Array.from(cardMatches.values())
+    .map((item) => ({ ...item, reason: buildCardMatchReason(item.card, item.missions) }))
+    .sort((a, b) => b.missions.length - a.missions.length || cardSpecificityScore(b) - cardSpecificityScore(a) || (Number(b.card.overall) || 0) - (Number(a.card.overall) || 0))
+    .slice(0, 10);
+
+  return {
+    mode,
+    label: formatModeKey(mode),
+    labels: [formatModeKey(mode)],
+    modes: [mode],
+    missions,
+    cards: cardsRanked,
+    missing,
+  };
+}
+
+function findCardsForMission(mission, cards) {
+  const playerName = extractSpecificPlayerName(mission);
+  const team = extractRequiredTeam(mission);
+  const statType = getMissionStatType(mission);
+
+  let matches = cards.map(normalizeInventoryCard);
+
+  if (playerName) {
+    const playerTokens = normalizeText(playerName).split(' ').filter((token) => token.length >= 3);
+    matches = matches.filter((card) => playerTokens.every((token) => normalizeText(card.name).includes(token)));
+  }
+
+  if (team) {
+    matches = matches.filter((card) => normalizeText(card.team).includes(normalizeText(team)));
+  }
+
+  if (statType === 'hitting') {
+    matches = matches.filter((card) => !isPitcherPosition(card.position));
+  } else if (statType === 'pitching') {
+    matches = matches.filter((card) => isPitcherPosition(card.position));
+  }
+
+  if (!playerName && !team && statType === 'hitting') {
+    matches = matches.filter((card) => !isPitcherPosition(card.position));
+  }
+
+  if (!playerName && !team && statType === 'pitching') {
+    matches = matches.filter((card) => isPitcherPosition(card.position));
+  }
+
+  return matches
+    .sort((a, b) => (Number(b.overall) || 0) - (Number(a.overall) || 0) || a.name.localeCompare(b.name))
+    .slice(0, 12);
+}
+
+function cardSpecificityScore(item) {
+  return item.missions.reduce((score, mission) => {
+    if (extractSpecificPlayerName(mission)) return score + 4;
+    if (extractRequiredTeam(mission)) return score + 3;
+    return score + 1;
+  }, 0);
+}
+
+function buildCardMatchReason(card, missions) {
+  const parts = missions.map((mission) => {
+    const team = extractRequiredTeam(mission);
+    const player = extractSpecificPlayerName(mission);
+    const statType = getMissionStatType(mission);
+    if (player) return `Jugador requerido: ${player}`;
+    if (team) return `${team} players: ${mission.description || mission.name}`;
+    if (statType === 'hitting') return `Bateador para: ${mission.description || mission.name}`;
+    if (statType === 'pitching') return `Pitcher para: ${mission.description || mission.name}`;
+    return mission.description || mission.name;
+  });
+
+  return Array.from(new Set(parts)).slice(0, 3);
+}
+
+function renderInternalObjectiveReport(report) {
+  internalPanel.classList.remove('hidden');
+  internalSummaryBlock.classList.remove('hidden');
+  internalSummaryBlock.innerHTML = `
+    <div class="ai-summary-inner">
+      <strong class="ai-summary-label">Resumen interno</strong>
+      <p class="ai-summary-text">${report.actionable.length} objetivos jugables analizados. ${report.nonPlayable.length} objetivo(s) de coleccion o no jugables separados del informe.</p>
+    </div>
+  `;
+
+  if (!report.recommendations.length) {
+    internalResultsNode.innerHTML = '<div class="ai-empty">No encontre objetivos jugables que compartan un modo. Selecciona mas objetivos o escanea mas programas.</div>';
+    internalPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
+
+  internalResultsNode.innerHTML = `
+    ${report.recommendations.map(renderInternalRecommendation).join('')}
+    ${report.nonPlayable.length ? renderNonPlayableObjectives(report.nonPlayable) : ''}
+  `;
+  internalPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderInternalRecommendation(rec, index) {
+  return `
+    <div class="ai-rec-card internal-rec-card">
+      <div class="ai-rec-header">
+        <div class="ai-rec-badge">${index + 1}</div>
+        <div class="ai-rec-meta">
+          <div class="ai-rec-programs">
+            ${rec.labels.map((label) => `<span class="ai-program-chip">${escapeHtml(label)}</span>`).join('')}
+          </div>
+        </div>
+        <div class="ai-rec-count">${rec.missions.length} objetivo${rec.missions.length !== 1 ? 's' : ''}</div>
+      </div>
+      <div class="ai-strategy">
+        <span class="ai-field-label">Plan</span>
+        <p>${escapeHtml(buildInternalPlanText(rec))}</p>
+      </div>
+      <div class="ai-missions-list">
+        <span class="ai-field-label">Objetivos que avanzan juntos</span>
+        <ul>
+          ${rec.missions.map((mission) => `<li>${escapeHtml(`[${mission.programTitle}] ${mission.description || mission.name}`)}</li>`).join('')}
+        </ul>
+      </div>
+      ${rec.cards.length ? `
+        <div class="ai-cards-section">
+          <span class="ai-field-label ai-field-label-owned">Cartas utiles en tu inventario</span>
+          <div class="ai-card-list">
+            ${rec.cards.map(({ card, missions, reason }) => renderInternalCard(card, missions, reason)).join('')}
+          </div>
+        </div>
+      ` : ''}
+      ${rec.missing.length ? `
+        <div class="ai-cards-section">
+          <span class="ai-field-label ai-field-label-missing">Cartas especificas no detectadas</span>
+          <div class="ai-card-list">
+            ${rec.missing.map((item) => `
+              <div class="ai-card-row ai-card-missing">
+                <div class="ai-card-indicator">+</div>
+                <div class="ai-card-info">
+                  <strong class="ai-card-name">${escapeHtml(item.name)}</strong>
+                  <span class="ai-card-reason">${escapeHtml(`[${item.mission.programTitle}] ${item.mission.description || item.mission.name}`)}</span>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderInternalCard(card, missions, reason) {
+  return `
+    <div class="ai-card-row ai-card-owned">
+      <div class="ai-card-indicator">✓</div>
+      <div class="ai-card-info">
+        <strong class="ai-card-name">${escapeHtml(card.name)}</strong>
+        <span class="ai-card-attrs">${escapeHtml([card.overall ? `${card.overall} OVR` : '', card.position, card.team, card.series].filter(Boolean).join(' · '))}</span>
+        <span class="ai-card-reason">${escapeHtml(reason?.join(' | ') || `${missions.length} objetivo compatible`)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderNonPlayableObjectives(missions) {
+  return `
+    <div class="ai-rec-card">
+      <div class="ai-strategy">
+        <span class="ai-field-label">No jugables / coleccion</span>
+        <p>Estos objetivos no se optimizan con lineup o modo de juego.</p>
+      </div>
+      <div class="ai-missions-list">
+        <ul>
+          ${missions.map((mission) => `<li>${escapeHtml(`[${mission.programTitle}] ${mission.description || mission.name}`)}</li>`).join('')}
+        </ul>
+      </div>
+    </div>
+  `;
+}
+
+function buildInternalPlanText(rec) {
+  const priorityCards = rec.cards
+    .filter(({ missions }) => missions.length > 1 || missions.some((mission) => extractRequiredTeam(mission) || extractSpecificPlayerName(mission)))
+    .sort((a, b) => cardSpecificityScore(b) - cardSpecificityScore(a) || b.missions.length - a.missions.length || (Number(b.card.overall) || 0) - (Number(a.card.overall) || 0))
+    .slice(0, 4)
+    .map(({ card }) => card.name);
+  const cardText = priorityCards.length ? ` priorizando ${priorityCards.join(', ')}` : '';
+  return `Juega en ${rec.labels.join(', ')}${cardText}. Este grupo comparte modos y los requisitos se pueden avanzar en la misma sesion.`;
+}
+
+function isNonPlayableMission(mission) {
+  const text = normalizeText(`${mission.name || ''} ${mission.description || ''} ${mission.objectiveGroup || ''}`);
+  return text.includes('collection') ||
+    text.includes('collect the') ||
+    text.includes('complete a series of missions') ||
+    text.includes('complete hits missions') ||
+    text.includes('find a repeatable mission') ||
+    text.includes('wheel spins') ||
+    text.includes('voucher') ||
+    text.includes('exchange');
+}
+
+function normalizeInventoryCard(card) {
+  return {
+    ...card,
+    name: cleanCardName(card.name),
+    team: normalizeCardTeamName(card.team || card.name),
+    position: card.position || '',
+    overall: Number(card.overall) || 0,
+    series: card.series || '',
+  };
+}
+
+function cleanCardName(name) {
+  return String(name || '')
+    .replace(/^x\d+\s+/i, '')
+    .replace(/\s+\d+\s+(?:SP|RP|CP|C|1B|2B|3B|SS|LF|CF|RF|DH)\b.*$/i, '')
+    .trim();
+}
+
+function normalizeCardTeamName(value) {
+  const text = normalizeText(value);
+  const teams = getTeamNames();
+  return teams.find((team) => text.includes(normalizeText(team))) || '';
+}
+
+function extractRequiredTeam(mission) {
+  const text = normalizeText(`${mission.description || ''} ${mission.name || ''}`);
+  return getTeamNames().find((team) => text.includes(normalizeText(team)));
+}
+
+function extractSpecificPlayerName(mission) {
+  const text = String(`${mission.description || ''} ${mission.name || ''}`);
+  const match = text.match(/\bwith\s+(.+?)(?:\s+players?|\s+cards?|\s+in\b|\.|$)/i);
+  if (!match?.[1]) return '';
+  const phrase = match[1].replace(/\b(Jolt|Live Series|Topps Now|Spotlight|Awards|Breakout)\b/gi, '').trim();
+  return phrase.split(/\s+/).length >= 2 ? phrase : '';
+}
+
+function getMissionStatType(mission) {
+  const text = normalizeText(`${mission.description || ''} ${mission.name || ''}`);
+  if (/\b(strikeout|strikeouts|innings pitched|inning pitched)\b/.test(text)) return 'pitching';
+  if (/\b(hit|hits|home run|home runs|rbi|run|runs|stolen base|total bases)\b/.test(text)) return 'hitting';
+  return 'general';
+}
+
+function extractModeKeys(whereToPlay) {
+  const text = normalizeText(whereToPlay);
+  const modes = [];
+  if (text.includes('conquest')) modes.push('conquest');
+  if (text.includes('mini seasons')) modes.push('mini_seasons');
+  if (text.includes('1 vs 1 ranked')) modes.push('ranked');
+  if (text.includes('ranked co op')) modes.push('ranked_coop');
+  if (text.includes('events')) modes.push('events');
+  if (text.includes('weekend classic')) modes.push('weekend_classic');
+  if (text.includes('battle royale')) modes.push('battle_royale');
+  if (text.includes('play vs cpu') || text.includes('vs cpu')) modes.push('vs_cpu');
+  if (text.includes('diamond quest')) modes.push('diamond_quest');
+  return modes;
+}
+
+function formatModeKey(mode) {
+  return {
+    conquest: 'Conquest',
+    mini_seasons: 'Mini Seasons',
+    ranked: '1 vs 1 Ranked',
+    ranked_coop: 'Ranked Co-op',
+    events: 'Events',
+    weekend_classic: 'Weekend Classic',
+    battle_royale: 'Battle Royale',
+    vs_cpu: 'Play vs CPU',
+    diamond_quest: 'Diamond Quest',
+  }[mode] || mode;
+}
+
+function modePriority(mode) {
+  return ['conquest', 'vs_cpu', 'mini_seasons', 'diamond_quest', 'events', 'battle_royale', 'ranked', 'ranked_coop', 'weekend_classic'].indexOf(mode);
+}
+
+function isPitcherPosition(position) {
+  return ['SP', 'RP', 'CP'].includes(String(position || '').toUpperCase());
+}
+
+function normalizeText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getTeamNames() {
+  return [
+    'Athletics', 'Orioles', 'Red Sox', 'Cubs', 'White Sox', 'Reds', 'Guardians',
+    'Rockies', 'Tigers', 'Astros', 'Royals', 'Angels', 'Dodgers', 'Marlins',
+    'Brewers', 'Twins', 'Mets', 'Yankees', 'Phillies', 'Pirates', 'Padres',
+    'Giants', 'Mariners', 'Cardinals', 'Rays', 'Rangers', 'Blue Jays',
+    'Nationals', 'Braves', 'Diamondbacks',
+  ];
+}
+
 async function runAiSuggest() {
+  const selectedMissions = await showAiMissionPicker(getAiCandidateMissions());
+  if (!selectedMissions) return;
+  if (!selectedMissions.length) {
+    showToast('Selecciona al menos un objetivo para analizar con IA.', 'warning', 5000);
+    return;
+  }
+
   aiSuggestButton.disabled = true;
   aiRegenerateButton.disabled = true;
   aiSuggestButton.textContent = 'Analizando...';
@@ -1271,7 +1817,13 @@ async function runAiSuggest() {
   aiPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   try {
-    const response = await apiFetch('/api/ai-suggest', { method: 'POST' });
+    const aiDebugPromptEnabled = new URLSearchParams(window.location.search).get('debugAiPrompt') === '1';
+    const aiSuggestUrl = aiDebugPromptEnabled ? '/api/ai-suggest?debugAiPrompt=1' : '/api/ai-suggest';
+    const response = await apiFetch(aiSuggestUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ missionKeys: selectedMissions.map(getMissionKey) }),
+    });
     const payload = await response.json();
 
     if (!response.ok) {
@@ -1296,13 +1848,17 @@ async function runAiSuggest() {
   }
 }
 
-aiSuggestButton.addEventListener('click', runAiSuggest);
+internalAnalyzeButton.addEventListener('click', runInternalAnalysis);
+aiSuggestButton.addEventListener('click', () => {
+  showToast('La IA queda en standby por ahora. Usa el analisis interno.', 'info', 5000);
+});
 aiRegenerateButton.addEventListener('click', runAiSuggest);
 
 function renderAiRecommendations(payload) {
   const recommendations = Array.isArray(payload.recommendations) ? payload.recommendations : [];
   const bestModes = Array.isArray(payload.best_overall_modes) ? payload.best_overall_modes : [];
   const summary = payload.summary || '';
+  const debugPromptMarkup = renderAiDebugPrompt(payload.debugPrompt);
 
   if (summary) {
     aiSummaryBlock.innerHTML = `
@@ -1321,11 +1877,24 @@ function renderAiRecommendations(payload) {
   }
 
   if (!recommendations.length) {
-    aiResultsNode.innerHTML = '<div class="ai-empty">No se encontraron combinaciones estrategicas. Intenta escanear mas programas.</div>';
+    aiResultsNode.innerHTML = `${debugPromptMarkup}<div class="ai-empty">No se encontraron combinaciones estrategicas. Intenta escanear mas programas.</div>`;
     return;
   }
 
-  aiResultsNode.innerHTML = recommendations.map((rec, index) => renderAiRecommendationCard(rec, index + 1)).join('');
+  aiResultsNode.innerHTML = `${debugPromptMarkup}${recommendations.map((rec, index) => renderAiRecommendationCard(rec, index + 1)).join('')}`;
+}
+
+function renderAiDebugPrompt(debugPrompt) {
+  if (!debugPrompt?.prompt) return '';
+
+  return `
+    <details class="ai-debug-prompt" open>
+      <summary>
+        Prompt enviado a Groq · ${escapeHtml(debugPrompt.model || 'modelo no informado')} · ${debugPrompt.missionsIncluded || 0} misiones · ${debugPrompt.cardsIncluded || 0} cartas
+      </summary>
+      <pre>${escapeHtml(debugPrompt.prompt)}</pre>
+    </details>
+  `;
 }
 
 function renderAiRecommendationCard(rec, index) {

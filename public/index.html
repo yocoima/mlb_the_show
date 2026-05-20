@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/styles.css" />
@@ -90,9 +90,10 @@
           <article class="workflow-step workflow-step-ai">
             <p class="workflow-step-number">Paso 4</p>
             <h2>Analisis estrategico</h2>
-            <p class="workflow-copy">La IA cruza todos tus objetivos activos con tu inventario y recomienda que cartas usar para avanzar varios a la vez.</p>
+            <p class="workflow-copy">Cruza objetivos seleccionados con tu inventario y recomienda grupos que puedes avanzar en la misma sesion.</p>
             <div class="workflow-actions">
-              <button id="ai-suggest-button" class="ai-button">Analizar objetivos con IA</button>
+              <button id="internal-analyze-button" class="ai-button">Analizar objetivos</button>
+              <button id="ai-suggest-button" class="ghost-button">IA en standby</button>
             </div>
           </article>
         </div>
@@ -203,6 +204,17 @@
         </div>
 
         <div id="missions-groups" class="missions-groups"></div>
+      </section>
+
+      <section id="internal-panel" class="panel ai-panel hidden">
+        <div class="table-header ai-panel-header">
+          <div>
+            <p class="panel-label ai-label">Analisis interno</p>
+            <h2>Recomendaciones agrupadas</h2>
+          </div>
+        </div>
+        <div id="internal-summary-block" class="ai-summary-block hidden"></div>
+        <div id="internal-results" class="ai-results"></div>
       </section>
 
       <section id="ai-panel" class="panel ai-panel hidden">

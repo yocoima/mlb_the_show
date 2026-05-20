@@ -16,6 +16,9 @@ const AUTH_CHECK_URL = 'https://mlb26.theshow.com/dashboard';
 const PROGRAMS_URL = 'https://mlb26.theshow.com/programs';
 const INVENTORY_URL = 'https://mlb26.theshow.com/inventory?captains=&display_position=&event=&has_augment=&max_rank=&min_rank=&name=&ownership=owned&rarity_id=&series_id=&stars=&team_id=&type=mlb_card';
 const PAGE_NAV_TIMEOUT_MS = Number(process.env.PAGE_NAV_TIMEOUT_MS) || 30000;
+const AI_MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+const AI_DEBUG_PROMPT = process.env.AI_DEBUG_PROMPT === 'true';
+const AI_DEBUG_PROMPT_MAX_CHARS = Number(process.env.AI_DEBUG_PROMPT_MAX_CHARS) || 12000;
 const PROGRAM_DISCOVERY_PATTERNS = [
   '/programs/program_view',
   '/programs/team_affinity',
@@ -857,10 +860,10 @@ async function runScanInBackground(selectedPrograms, userId) {
   } finally {
     state.active = false;
     state.cancelRequested = false;
-    state.phase = 'idle';
+    const finalTotalPrograms = Number(state.totalPrograms) || 0;
+    state.phase = 'completed';
     state.completedAt = new Date().toISOString();
-    state.totalPrograms = 0;
-    state.completedPrograms = 0;
+    state.completedPrograms = finalTotalPrograms || Number(state.completedPrograms) || 0;
     state.currentProgramTitle = '';
     state.startedAt = null;
 
@@ -890,17 +893,27 @@ app.post('/api/ai-suggest', async (req, res) => {
     const scanResults = normalizeUntitledPrograms(readScanResults(userId));
     const inventory = readInventoryResults(userId);
 
-    const missions = (scanResults.missions || []).filter((m) => (m.current || 0) < (m.target || 0));
+    const allActiveMissions = dedupeMissions(scanResults.missions || []).filter((m) => (m.current || 0) < (m.target || 0));
+    const selectedMissionKeys = Array.isArray(req.body?.missionKeys)
+      ? new Set(req.body.missionKeys.map((key) => String(key)))
+      : null;
+    const missions = selectedMissionKeys?.size
+      ? allActiveMissions.filter((mission) => selectedMissionKeys.has(getMissionKey(mission)))
+      : allActiveMissions;
     const cards = inventory?.cards || [];
 
     if (!missions.length) {
       return res.status(400).json({
         error: 'No hay objetivos activos para analizar.',
-        detail: 'Ejecuta un escaneo de programas primero.',
+        detail: selectedMissionKeys?.size
+          ? 'Los objetivos seleccionados ya no existen o ya fueron completados. Actualiza el escaneo.'
+          : 'Ejecuta un escaneo de programas primero.',
       });
     }
 
-    const prompt = buildAiSuggestPrompt(missions, cards);
+    const filteredCards = filterInventoryCardsForMissions(missions, cards, 50);
+    const prompt = buildAiSuggestPrompt(missions, filteredCards, cards.length);
+    logAiPromptForDebug(userId, prompt, missions.length, filteredCards.length);
     const rawResponse = await callGroqApi(apiKey, prompt);
 
     let parsed;
@@ -914,14 +927,29 @@ app.post('/api/ai-suggest', async (req, res) => {
       });
     }
 
-    return res.json({
+    const responsePayload = {
       recommendations: parsed.recommendations || [],
       best_overall_modes: parsed.best_overall_modes || [],
       summary: parsed.summary || '',
       analyzedAt: new Date().toISOString(),
       missionsAnalyzed: missions.length,
-      cardsProvided: cards.length,
-    });
+      cardsProvided: filteredCards.length,
+      cardsAvailable: cards.length,
+    };
+
+    sanitizeAiRecommendations(responsePayload, missions, filteredCards);
+
+    if (shouldReturnAiDebugPrompt(req)) {
+      responsePayload.debugPrompt = {
+        model: AI_MODEL,
+        prompt,
+        missionsIncluded: Math.min(missions.length, 20),
+        cardsIncluded: filteredCards.length,
+        cardsAvailable: cards.length,
+      };
+    }
+
+    return res.json(responsePayload);
   } catch (error) {
     console.error('[ai-suggest] Error:', error.message);
     return res.status(500).json({
@@ -939,7 +967,7 @@ async function callGroqApi(apiKey, userPrompt) {
       'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: 'llama-3.1-8b-instant',
+      model: AI_MODEL,
       messages: [
         {
           role: 'system',
@@ -965,37 +993,516 @@ async function callGroqApi(apiKey, userPrompt) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-function buildAiSuggestPrompt(missions, cards) {
+function shouldReturnAiDebugPrompt(req) {
+  return req.query?.debugAiPrompt === '1' || req.headers['x-ai-debug-prompt'] === '1';
+}
+
+function logAiPromptForDebug(userId, prompt, missionCount, cardCount) {
+  if (!AI_DEBUG_PROMPT) return;
+
+  const clippedPrompt = prompt.length > AI_DEBUG_PROMPT_MAX_CHARS
+    ? `${prompt.slice(0, AI_DEBUG_PROMPT_MAX_CHARS)}\n...[prompt recortado: ${prompt.length} caracteres totales]`
+    : prompt;
+
+  console.log(`[ai-suggest] Prompt debug user=${userId} model=${AI_MODEL} missions=${missionCount} cards=${cardCount} chars=${prompt.length}`);
+  console.log(clippedPrompt);
+}
+
+function sanitizeAiRecommendations(payload, missions, inventoryCards) {
+  const recommendations = Array.isArray(payload.recommendations) ? payload.recommendations : [];
+  const missionLookup = buildMissionLookup(missions);
+  const inventoryLookup = buildInventoryLookup(inventoryCards);
+  const bestOverall = new Set();
+  let removedInvalidCards = false;
+
+  for (const recommendation of recommendations) {
+    const covered = Array.isArray(recommendation.missions_covered) ? recommendation.missions_covered : [];
+    const coveredMissions = covered
+      .map((label) => findMissionForAiLabel(label, missionLookup))
+      .filter(Boolean);
+
+    const commonModes = intersectMissionModes(coveredMissions);
+    if (commonModes.length) {
+      recommendation.best_modes = commonModes.map(formatModeKeyForAi);
+      commonModes.forEach((mode) => bestOverall.add(formatModeKeyForAi(mode)));
+    }
+
+    const sanitizedCards = sanitizeAiRecommendedCards(
+      recommendation.recommended_cards,
+      coveredMissions,
+      inventoryLookup
+    );
+    recommendation.recommended_cards = sanitizedCards.cards;
+
+    if (sanitizedCards.removedNames.length) {
+      removedInvalidCards = true;
+      recommendation.strategy = buildValidatedStrategy(
+        recommendation.strategy,
+        recommendation.recommended_cards,
+        coveredMissions,
+        recommendation.best_modes
+      );
+    }
+  }
+
+  if (bestOverall.size) {
+    payload.best_overall_modes = Array.from(bestOverall);
+    payload.summary = sanitizeAiSummaryModeText(payload.summary, payload.best_overall_modes);
+  }
+
+  if (removedInvalidCards) {
+    payload.summary = buildValidatedSummary(recommendations, payload.best_overall_modes);
+  }
+}
+
+function buildValidatedSummary(recommendations, bestModes) {
+  const validCards = new Set();
+  const coveredPrograms = new Set();
+
+  for (const recommendation of recommendations) {
+    for (const card of Array.isArray(recommendation.recommended_cards) ? recommendation.recommended_cards : []) {
+      if (card?.name) validCards.add(card.name);
+    }
+    for (const program of Array.isArray(recommendation.programs) ? recommendation.programs : []) {
+      if (program) coveredPrograms.add(program);
+    }
+  }
+
+  const modeText = Array.isArray(bestModes) && bestModes.length ? ` en ${bestModes.join(', ')}` : '';
+  const cardText = validCards.size ? ` usando ${Array.from(validCards).join(', ')}` : '';
+  const programText = coveredPrograms.size ? ` para ${Array.from(coveredPrograms).join(', ')}` : '';
+  return `Resumen validado: se filtraron cartas que no cumplian equipo, jugador o requisito. Recomendacion final${modeText}${cardText}${programText}.`;
+}
+
+function sanitizeAiRecommendedCards(cards, coveredMissions, inventoryLookup) {
+  if (!Array.isArray(cards) || !coveredMissions.length) return { cards: [], removedNames: [] };
+
+  const kept = [];
+  const removedNames = [];
+
+  for (const rawCard of cards) {
+    const card = enrichAiCardFromInventory(rawCard, inventoryLookup);
+    if (coveredMissions.some((mission) => cardCanSatisfyMission(card, mission))) {
+      kept.push(card);
+    } else if (rawCard?.name) {
+      removedNames.push(rawCard.name);
+    }
+  }
+
+  return { cards: kept, removedNames };
+}
+
+function buildValidatedStrategy(originalStrategy, cards, coveredMissions, modes) {
+  const cardNames = cards.map((card) => card.name).filter(Boolean);
+  const missionLabels = coveredMissions
+    .map((mission) => `[${mission.programTitle}] ${mission.description || mission.name}`)
+    .filter(Boolean);
+  const modeText = Array.isArray(modes) && modes.length ? ` en ${modes.join(', ')}` : '';
+
+  if (cardNames.length) {
+    return `Juega${modeText} con ${cardNames.join(', ')} para avanzar los objetivos compatibles: ${missionLabels.join(' | ')}.`;
+  }
+
+  return originalStrategy
+    ? `${originalStrategy} No se mostraron cartas porque las recomendaciones de la IA no cumplian equipo, jugador o requisito.`
+    : 'No se mostraron cartas porque las recomendaciones de la IA no cumplian equipo, jugador o requisito.';
+}
+
+function enrichAiCardFromInventory(card, inventoryLookup) {
+  const inventoryCard = findInventoryCardForAiCard(card, inventoryLookup);
+  if (!inventoryCard) return card;
+
+  return {
+    ...card,
+    name: cleanInventoryCardName(inventoryCard.name) || card.name,
+    overall: card.overall || inventoryCard.overall || '',
+    position: card.position || inventoryCard.position || '',
+    team: card.team || normalizeCardTeam(inventoryCard.team) || '',
+    series: card.series || inventoryCard.series || '',
+    in_inventory: true,
+  };
+}
+
+function findInventoryCardForAiCard(card, inventoryLookup) {
+  const name = normalizeAiMatchText(card?.name || '');
+  if (!name) return null;
+  if (inventoryLookup.exact.has(name)) return inventoryLookup.exact.get(name);
+
+  for (const [candidate, inventoryCard] of inventoryLookup.searchable.entries()) {
+    if (candidate.includes(name) || name.includes(candidate)) {
+      return inventoryCard;
+    }
+  }
+
+  return null;
+}
+
+function buildInventoryLookup(cards) {
+  const exact = new Map();
+  const searchable = new Map();
+
+  for (const card of Array.isArray(cards) ? cards : []) {
+    const cleanName = normalizeAiMatchText(cleanInventoryCardName(card.name));
+    const fullName = normalizeAiMatchText(card.name || '');
+    if (cleanName) exact.set(cleanName, card);
+    if (cleanName) searchable.set(cleanName, card);
+    if (fullName) searchable.set(fullName, card);
+  }
+
+  return { exact, searchable };
+}
+
+function cardCanSatisfyMission(card, mission) {
+  if (!card || !mission) return false;
+
+  const playerTokens = extractSpecificPlayerTokens(mission);
+  if (playerTokens.length) {
+    const cardText = normalizeAiMatchText(`${card.name || ''} ${card.series || ''}`);
+    return playerTokens.every((token) => cardText.includes(token));
+  }
+
+  const filters = extractMissionFilters(mission);
+  const hasFilters = filters.series.length || filters.teams.length || filters.positions.length || filters.positionGroups.length;
+  if (hasFilters) {
+    return cardMatchesMission(card, filters);
+  }
+
+  if (hasHittingObjective(mission)) {
+    return !isPitcherPosition(card.position);
+  }
+
+  return true;
+}
+
+function extractSpecificPlayerTokens(mission) {
+  const normalized = normalizeAiMatchText(`${mission.description || ''} ${mission.name || ''}`);
+  return extractQuotedLikePlayerPhrases(normalized)
+    .flatMap((phrase) => extractAiMatchTokens(phrase))
+    .filter((token) => !isSeriesToken(token));
+}
+
+function sanitizeAiSummaryModeText(summary, validModes) {
+  if (!summary || !Array.isArray(validModes) || !validModes.length) return summary;
+  let nextSummary = summary;
+  for (const mode of validModes) {
+    nextSummary = nextSummary.replace(/Conquest\s+en\s+1\s+vs\s+1\s+Ranked/gi, mode);
+    nextSummary = nextSummary.replace(/Conquest\s+in\s+1\s+vs\s+1\s+Ranked/gi, mode);
+  }
+  return nextSummary;
+}
+
+function findMissionForAiLabel(label, missionLookup) {
+  const normalized = normalizeAiMatchText(label);
+  if (!normalized) return null;
+  if (missionLookup.has(normalized)) return missionLookup.get(normalized);
+
+  for (const [candidate, mission] of missionLookup.entries()) {
+    if (!candidate) continue;
+    if (candidate.includes(normalized) || normalized.includes(candidate)) {
+      return mission;
+    }
+  }
+
+  return null;
+}
+
+function buildMissionLookup(missions) {
+  const lookup = new Map();
+  for (const mission of missions) {
+    [
+      mission.name,
+      mission.description,
+      `${mission.programTitle} ${mission.name}`,
+      `${mission.programTitle} ${mission.description}`,
+    ].filter(Boolean).forEach((label) => {
+      lookup.set(normalizeAiMatchText(label), mission);
+    });
+  }
+  return lookup;
+}
+
+function intersectMissionModes(missions) {
+  if (!missions.length) return [];
+  let common = null;
+
+  for (const mission of missions) {
+    const modes = extractModeSet(mission.whereToPlay);
+    if (!modes.size) continue;
+    common = common === null
+      ? new Set(modes)
+      : new Set(Array.from(common).filter((mode) => modes.has(mode)));
+  }
+
+  return common ? Array.from(common) : [];
+}
+
+function buildAiSuggestPrompt(missions, cards, totalCardsAvailable = cards.length) {
   const missionsText = missions
     .slice(0, 20)
     .map((m, i) =>
-      `${i + 1}.[${escapeJsonString(m.programTitle)}]${escapeJsonString(m.name)}|${escapeJsonString(m.whereToPlay)}|${m.current}/${m.target}`
+      `${i + 1}.[${escapeJsonString(m.programTitle)}]${escapeJsonString(m.description || m.name)}|${escapeJsonString(m.whereToPlay)}|MODOS:${formatModeListForAi(m.whereToPlay)}|${m.current}/${m.target}`
     )
     .join('\n');
 
   const cardsText = cards.length
     ? cards
-        .slice(0, 50)
-        .map((c) => `${c.name}(${c.overall || '?'})${c.position || ''}${c.team ? ` ${c.team}` : ''}${c.series ? ` ${c.series}` : ''}`)
+        .map((c) => formatCardForAiPrompt(c))
         .join('\n')
-    : 'Sin inventario.';
+    : 'Sin cartas filtradas por requisito.';
 
   return `Analiza objetivos de MLB The Show 26 Diamond Dynasty. Encuentra estrategias para avanzar MULTIPLES objetivos en la misma sesion.
 
 OBJETIVOS (${missions.length} total${missions.length > 20 ? ', primeros 20' : ''}):
 ${missionsText}
 
-INVENTARIO (${cards.length} cartas${cards.length > 50 ? ', primeras 50' : ''}):
+INVENTARIO FILTRADO (${cards.length} cartas enviadas de ${totalCardsAvailable} disponibles):
 ${cardsText}
 
-Agrupa objetivos que se completan en la misma partida. El modo recomendado debe aparecer en "Donde jugar" de todos los objetivos del grupo. Usa cartas del inventario cuando aplique. Ordena por mayor impacto primero.
+Analiza los objetivos, determina que cartas cumplen con los requisitos de los distintos objetivos, analiza que cartas, requisitos y Where to Play se cruzan entre si para cumplir la mayor cantidad de objetivos en menos juegos. Recomienda SOLO cartas listadas en INVENTARIO FILTRADO. Si un requisito dice "with Twins players", recomienda solo cartas TEAM Twins para ese objetivo; si dice "with Mariners players", recomienda solo cartas TEAM Mariners. Si el requisito pide hits, home runs, RBI o bases robadas, recomienda bateadores y no pitchers. Si el requisito pide Parallel XP con un jugador especifico, recomienda solo ese jugador si aparece en el inventario filtrado; si no aparece, explicalo en strategy y no inventes una carta sustituta. Para cada recommendation, best_modes debe contener solo modos exactos que aparezcan en TODOS los objetivos cubiertos por esa recommendation. No combines dos modos distintos en una frase: "Conquest en 1 vs 1 Ranked" es invalido. Si un objetivo solo tiene Conquest y otro tiene Conquest, Ranked y Events, el modo comun correcto es solo Conquest.
 
 JSON de respuesta (sin texto extra):
-{"recommendations":[{"missions_covered":["mision1","mision2"],"programs":["prog1"],"best_modes":["Conquest"],"recommended_cards":[{"name":"Jugador","overall":93,"position":"1B","team":"Yankees","series":"Spotlight","in_inventory":true,"covers_missions_count":2,"reason":"razon breve"}],"strategy":"que hacer y como"}],"best_overall_modes":["Conquest"],"summary":"resumen breve"}`;
+{"recommendations":[{"missions_covered":["",""],"programs":[""],"best_modes":[""],"recommended_cards":[{"name":"","overall":"","position":"","team":"","series":"","in_inventory":true,"covers_missions_count":"","reason":""}],"strategy":""}],"best_overall_modes":[""],"summary":""}`;
 }
 
 function escapeJsonString(value) {
   return String(value || '').replace(/[\n\r"\\]/g, ' ').trim();
+}
+
+function formatCardForAiPrompt(card) {
+  return [
+    cleanInventoryCardName(card.name) || card.name || '',
+    card.overall ? `OVR ${card.overall}` : '',
+    card.position ? `POS ${card.position}` : '',
+    normalizeCardTeam(card.team) ? `TEAM ${normalizeCardTeam(card.team)}` : '',
+    card.series ? `SERIES ${card.series}` : '',
+  ].filter(Boolean).join(' | ');
+}
+
+function cleanInventoryCardName(name) {
+  return String(name || '')
+    .replace(/^x\d+\s+/i, '')
+    .replace(/\s+\d+\s+(?:SP|RP|CP|C|1B|2B|3B|SS|LF|CF|RF|DH)\b.*$/i, '')
+    .trim();
+}
+
+function normalizeCardTeam(team) {
+  const text = normalizeAiMatchText(team || '');
+  const filters = extractMissionFilters({ name: text, description: text });
+  return filters.teams[0] || String(team || '').replace(/^x\d+\s+/i, '').trim();
+}
+
+function formatModeListForAi(whereToPlay) {
+  const modes = Array.from(extractModeSet(whereToPlay)).map(formatModeKeyForAi);
+  return modes.length ? modes.join(', ') : 'Sin modo especifico';
+}
+
+function formatModeKeyForAi(mode) {
+  const labels = {
+    conquest: 'Conquest',
+    mini_seasons: 'Mini Seasons',
+    ranked: '1 vs 1 Ranked',
+    ranked_coop: 'Ranked Co-op',
+    events: 'Events',
+    weekend_classic: 'Weekend Classic',
+    moments: 'Moments',
+    showdown: 'Showdown',
+    battle_royale: 'Battle Royale',
+    vs_cpu: 'Play vs CPU',
+    diamond_quest: 'Diamond Quest',
+  };
+  return labels[mode] || mode;
+}
+
+function getMissionKey(mission) {
+  return [
+    mission.sourceUrl || '',
+    mission.programTitle || '',
+    mission.name || '',
+    mission.description || '',
+  ].join('||');
+}
+
+function filterInventoryCardsForMissions(missions, cards, limit = 50) {
+  if (!cards.length) return [];
+
+  const requirementTokens = new Set();
+  const exactPhrases = [];
+  const playerNameTokens = new Set();
+  const missionFilters = missions.slice(0, 20).map(extractMissionFilters);
+  const promptCards = cards.map((card) => ({
+    ...card,
+    name: cleanInventoryCardName(card.name) || card.name,
+    team: normalizeCardTeam(card.team),
+  }));
+
+  for (const mission of missions.slice(0, 20)) {
+    const text = `${mission.description || ''} ${mission.name || ''}`;
+    const normalized = normalizeAiMatchText(text);
+    const phrases = extractQuotedLikePlayerPhrases(normalized);
+    exactPhrases.push(...phrases);
+    for (const phrase of phrases) {
+      extractAiMatchTokens(phrase)
+        .filter((token) => !isSeriesToken(token))
+        .forEach((token) => playerNameTokens.add(token));
+    }
+    extractAiMatchTokens(normalized).forEach((token) => requirementTokens.add(token));
+  }
+
+  const scored = promptCards
+    .map((card, index) => {
+      const cardText = normalizeAiMatchText(`${card.name || ''} ${card.team || ''} ${card.series || ''} ${card.position || ''}`);
+      const cardTokens = extractAiMatchTokens(cardText);
+      let score = 0;
+
+      for (const token of cardTokens) {
+        if (requirementTokens.has(token)) score += 3;
+        if (playerNameTokens.has(token)) score += 10;
+      }
+
+      for (const phrase of exactPhrases) {
+        if (phrase && cardText.includes(phrase)) score += 12;
+      }
+
+      for (const filters of missionFilters) {
+        const hasFilters = filters.series.length || filters.teams.length || filters.positions.length || filters.positionGroups.length;
+        if (hasFilters && cardMatchesMission(card, filters)) {
+          score += 20;
+        }
+      }
+
+      const team = normalizeAiMatchText(card.team || '');
+      if (team && requirementTokens.has(team)) score += 8;
+
+      return { card, index, score, cardTokens };
+    })
+    .filter((item) => {
+      if (item.score <= 0) return false;
+      if (!playerNameTokens.size) return true;
+      for (const token of item.cardTokens) {
+        if (playerNameTokens.has(token)) return true;
+      }
+      return item.score >= 8;
+    })
+    .sort((a, b) => b.score - a.score || (Number(b.card.overall) || 0) - (Number(a.card.overall) || 0) || a.index - b.index);
+
+  const augmented = addGenericObjectiveCards(scored, promptCards, missions.slice(0, 20), limit);
+  return augmented.slice(0, limit).map((item) => item.card);
+}
+
+function addGenericObjectiveCards(scoredItems, cards, missions, limit) {
+  const byKey = new Map();
+  const addCard = (card, index, score) => {
+    const key = normalizeAiMatchText(`${card.name || ''} ${card.team || ''} ${card.series || ''} ${card.position || ''}`);
+    const current = byKey.get(key);
+    if (!current || score > current.score) {
+      byKey.set(key, { card, index, score, cardTokens: extractAiMatchTokens(key) });
+    }
+  };
+
+  scoredItems.forEach((item) => addCard(item.card, item.index, item.score));
+
+  const needsHitters = missions.some(hasGenericHittingObjective);
+  const needsPitchers = missions.some(hasPitchingObjective);
+  const needsAnyPxp = missions.some(hasGenericPxpObjective);
+
+  if (needsHitters) {
+    topCardsByRole(cards, (card) => !isPitcherPosition(card.position), Math.ceil(limit * 0.55))
+      .forEach(({ card, index }) => addCard(card, index, 12 + (Number(card.overall) || 0) / 100));
+  }
+
+  if (needsPitchers) {
+    topCardsByRole(cards, (card) => isPitcherPosition(card.position), Math.ceil(limit * 0.45))
+      .forEach(({ card, index }) => addCard(card, index, 12 + (Number(card.overall) || 0) / 100));
+  }
+
+  if (needsAnyPxp && byKey.size < limit) {
+    topCardsByRole(cards, () => true, limit)
+      .forEach(({ card, index }) => addCard(card, index, 6 + (Number(card.overall) || 0) / 100));
+  }
+
+  if (!byKey.size) {
+    topCardsByRole(cards, () => true, limit)
+      .forEach(({ card, index }) => addCard(card, index, (Number(card.overall) || 0) / 100));
+  }
+
+  return Array.from(byKey.values())
+    .sort((a, b) => b.score - a.score || (Number(b.card.overall) || 0) - (Number(a.card.overall) || 0) || a.index - b.index);
+}
+
+function topCardsByRole(cards, predicate, limit) {
+  return cards
+    .map((card, index) => ({ card, index }))
+    .filter(({ card }) => predicate(card))
+    .sort((a, b) => (Number(b.card.overall) || 0) - (Number(a.card.overall) || 0) || a.index - b.index)
+    .slice(0, limit);
+}
+
+function normalizeAiMatchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9' ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractAiMatchTokens(value) {
+  const stopWords = new Set([
+    'with', 'players', 'player', 'tally', 'parallel', 'xp', 'pxp', 'the', 'and', 'or',
+    'in', 'on', 'to', 'a', 'an', 'of', 'from', 'get', 'earn', 'record', 'total', 'hits',
+    'hit', 'home', 'runs', 'run', 'rbi', 'strikeouts', 'strikeout', 'innings', 'inning',
+    'fan', 'number', 'no', 'vs', 'cpu', 'ranked', 'events', 'conquest', 'season', 'seasons',
+    'any', 'difficulty', 'city', 'kansas', 'new', 'york', 'los', 'angeles', 'san', 'diego',
+    'francisco', 'tampa', 'bay', 'st', 'louis', 'chicago',
+  ]);
+
+  return value
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !stopWords.has(token) && !/^\d+$/.test(token));
+}
+
+function isSeriesToken(token) {
+  return ['jolt', 'live', 'awards', 'breakout', 'spotlight', 'cornerstone', 'topps', 'now'].includes(token);
+}
+
+function hasHittingObjective(mission) {
+  const text = `${mission.description || ''} ${mission.name || ''}`.toLowerCase();
+  return /\b(hit|hits|home runs?|hr|rbi|stolen base|bases robadas?|steal)\b/.test(text);
+}
+
+function hasGenericHittingObjective(mission) {
+  if (!hasHittingObjective(mission)) return false;
+  return !hasSpecificPlayerRequirement(mission);
+}
+
+function hasPitchingObjective(mission) {
+  const text = `${mission.description || ''} ${mission.name || ''}`.toLowerCase();
+  return /\b(strikeouts?|innings pitched|innings?|k's|ks)\b/.test(text);
+}
+
+function hasGenericPxpObjective(mission) {
+  const text = `${mission.description || ''} ${mission.name || ''}`.toLowerCase();
+  return (text.includes('parallel xp') || text.includes('pxp')) && !hasSpecificPlayerRequirement(mission);
+}
+
+function hasSpecificPlayerRequirement(mission) {
+  return extractSpecificPlayerTokens(mission).length > 0;
+}
+
+function isPitcherPosition(position) {
+  return ['SP', 'RP', 'CP'].includes(String(position || '').toUpperCase());
+}
+
+function extractQuotedLikePlayerPhrases(value) {
+  const phrases = [];
+  const match = value.match(/\bwith\s+(.+?)(?:\s+players?|\s+cards?|\s+in\b|\.|$)/);
+  if (match?.[1]) {
+    const phrase = match[1].trim();
+    if (phrase.split(' ').length >= 2) phrases.push(phrase);
+  }
+  return phrases;
 }
 
 app.get('*', (req, res) => {
@@ -1087,12 +1594,15 @@ function extractModeSet(whereToPlay) {
   const modes = new Set();
   if (w.includes('conquest')) modes.add('conquest');
   if (w.includes('mini seasons') || w.includes('mini-seasons')) modes.add('mini_seasons');
-  if (w.includes('ranked')) modes.add('ranked');
+  if (w.includes('1 vs 1 ranked')) modes.add('ranked');
+  if (w.includes('ranked co-op') || w.includes('ranked co op')) modes.add('ranked_coop');
   if (w.includes('events')) modes.add('events');
+  if (w.includes('weekend classic')) modes.add('weekend_classic');
   if (w.includes('moments')) modes.add('moments');
   if (w.includes('showdown')) modes.add('showdown');
   if (w.includes('battle royale')) modes.add('battle_royale');
-  if (w.includes('vs cpu') || w.includes('vs. cpu')) modes.add('vs_cpu');
+  if (w.includes('play vs cpu') || w.includes('vs cpu') || w.includes('vs. cpu')) modes.add('vs_cpu');
+  if (w.includes('diamond quest')) modes.add('diamond_quest');
   return modes;
 }
 
@@ -2085,20 +2595,52 @@ async function extractProgramsPayloadFromDom(page) {
 }
 
 function dedupeMissions(missions) {
-  const seen = new Set();
-  const deduped = [];
+  const byKey = new Map();
 
-  for (const mission of missions) {
-    const key = `${mission.programTitle || ''}::${mission.name || ''}::${mission.current || 0}/${mission.target || 0}`;
-    if (seen.has(key)) {
-      continue;
+  for (const rawMission of missions) {
+    const mission = normalizeMissionPresentation(rawMission);
+    const key = buildMissionDedupeKey(mission);
+    const existing = byKey.get(key);
+    if (!existing || missionSpecificityScore(mission) > missionSpecificityScore(existing)) {
+      byKey.set(key, mission);
     }
-
-    seen.add(key);
-    deduped.push(mission);
   }
 
-  return deduped;
+  return Array.from(byKey.values());
+}
+
+function normalizeMissionPresentation(mission) {
+  const description = String(mission?.description || '');
+  const bossCollectionMatch = description.match(/Collect the two (\d+(?:st|nd|rd|th)) Inning XP Reward Path bosses/i);
+  if (bossCollectionMatch) {
+    return {
+      ...mission,
+      name: `${bossCollectionMatch[1]} Inning Boss Collection`,
+      objectiveGroup: 'Inning Boss Collection',
+    };
+  }
+
+  return mission;
+}
+
+function buildMissionDedupeKey(mission) {
+  return [
+    normalizeAiMatchText(mission.sourceUrl || ''),
+    normalizeAiMatchText(mission.programTitle || ''),
+    normalizeAiMatchText(mission.description || mission.name || ''),
+    normalizeAiMatchText(mission.whereToPlay || ''),
+    `${mission.current || 0}/${mission.target || 0}`,
+  ].join('::');
+}
+
+function missionSpecificityScore(mission) {
+  const name = String(mission.name || '').trim();
+  const group = String(mission.objectiveGroup || '').trim();
+  let score = name.length ? 1 : 0;
+  if (name && group && name !== group) score += 3;
+  if (!/\bmissions?\b/i.test(name)) score += 2;
+  if (mission.description && name && !mission.description.includes(name)) score += 1;
+  return score;
 }
 
 function dedupeProgramEntries(entries) {
@@ -2325,7 +2867,11 @@ function readScanResults(userId) {
 }
 
 function writeScanResults(userId, results) {
-  fs.writeFileSync(getScanResultsFile(userId), JSON.stringify(results, null, 2));
+  const normalizedResults = {
+    ...results,
+    missions: Array.isArray(results?.missions) ? dedupeMissions(results.missions) : [],
+  };
+  fs.writeFileSync(getScanResultsFile(userId), JSON.stringify(normalizedResults, null, 2));
 }
 
 function readInventoryResults(userId) {
@@ -2355,7 +2901,6 @@ function writeInventoryResults(userId, results) {
 
 function buildPersistedScanResults({ previous, scannedMissions, scannedProgramUrls, catalogPrograms, sessionExpired, skippedLinks, cancelled }) {
   const scannedSet = new Set(scannedProgramUrls);
-  const previousMissions = Array.isArray(previous?.missions) ? previous.missions.filter((mission) => !isIgnoredMission(mission)) : [];
   const merged = [];
   const seen = new Set();
 
@@ -2368,21 +2913,6 @@ function buildPersistedScanResults({ previous, scannedMissions, scannedProgramUr
     const key = missionIdentity(nextMission);
     seen.add(key);
     merged.push(nextMission);
-  }
-
-  for (const mission of previousMissions) {
-    const key = missionIdentity(mission);
-    if (seen.has(key)) {
-      continue;
-    }
-
-    if (scannedSet.size > 0 && !scannedSet.has(mission.sourceUrl)) {
-      merged.push({
-        ...mission,
-        scanStatus: 'stale',
-      });
-      seen.add(key);
-    }
   }
 
   return {
