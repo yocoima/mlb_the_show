@@ -166,7 +166,7 @@ body::before {
 .hero {
   position: relative;
   overflow: hidden;
-  padding: 112px 28px 28px;
+  padding: 160px 28px 28px;
   border: 1px solid var(--panel-border);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(19, 26, 44, 0.98), rgba(15, 21, 36, 0.96));
@@ -243,6 +243,25 @@ body::before {
   gap: 10px;
   align-items: center;
   justify-content: flex-end;
+}
+
+.fixed-progress-strip {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 16px;
+  align-items: center;
+  padding-top: 12px;
+  border-top: 1px solid rgba(158, 178, 207, 0.12);
+}
+
+.fixed-progress-strip .scan-detail {
+  min-width: 0;
+}
+
+.fixed-progress-strip .scan-progress-track {
+  grid-column: 1 / -1;
+  margin-top: 0;
 }
 
 .session-badge,
@@ -572,7 +591,7 @@ body::before {
 }
 
 .scan-detail {
-  margin: 8px 0 0;
+  margin: 0;
   color: var(--muted);
   font-size: 0.95rem;
 }
@@ -1788,7 +1807,7 @@ td {
   }
 
   .hero {
-    padding-top: 158px;
+    padding-top: 226px;
     padding-bottom: 22px;
   }
 
@@ -1801,6 +1820,10 @@ td {
   .header-actions {
     grid-column: 1 / -1;
     justify-content: stretch;
+  }
+
+  .fixed-progress-strip {
+    gap: 8px 12px;
   }
 
   .session-badge,

@@ -54,6 +54,13 @@
             </div>
             <button id="logout-profile-button" class="ghost-button profile-switch-button" type="button">Cambiar usuario</button>
           </div>
+          <div class="fixed-progress-strip">
+            <p id="scan-detail" class="scan-detail">Todavia no hay un escaneo en progreso.</p>
+            <span id="scan-progress-label" class="scan-progress-label">0%</span>
+            <div class="scan-progress-track" aria-hidden="true">
+              <span id="scan-progress-bar"></span>
+            </div>
+          </div>
         </div>
 
         <article class="dashboard-card">
@@ -63,7 +70,6 @@
                 Sesion
               </p>
               <strong id="status">Listo para escanear.</strong>
-              <p id="scan-detail" class="scan-detail">Todavia no hay un escaneo en progreso.</p>
             </div>
             <div class="dashboard-meta">
               <div class="dashboard-meta-item">
@@ -75,14 +81,6 @@
                 <span id="scan-time">Todavia no ejecutado</span>
               </div>
             </div>
-          </div>
-
-          <div class="scan-progress-row">
-            <span>Progreso global</span>
-            <span id="scan-progress-label" class="scan-progress-label">0%</span>
-          </div>
-          <div class="scan-progress-track" aria-hidden="true">
-            <span id="scan-progress-bar"></span>
           </div>
 
           <div class="dashboard-stats">
