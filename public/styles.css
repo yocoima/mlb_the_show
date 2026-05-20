@@ -377,13 +377,24 @@ body::before {
 
 .workflow-grid {
   display: grid;
+  grid-template-areas:
+    "discover ai"
+    "scan scan";
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-top: 18px;
 }
 
-.workflow-step:nth-child(2) {
-  grid-column: span 2;
+.workflow-step-discovery {
+  grid-area: discover;
+}
+
+.workflow-step-scan {
+  grid-area: scan;
+}
+
+.workflow-step-ai {
+  grid-area: ai;
 }
 
 .dashboard-card {
@@ -763,13 +774,15 @@ body::before {
   overflow: hidden;
 }
 
-.embedded-selector {
+.embedded-selector,
+.embedded-results {
   margin-top: 20px;
   border-top: 1px solid rgba(158, 178, 207, 0.14);
   padding-top: 18px;
 }
 
-.embedded-selector-header {
+.embedded-selector-header,
+.embedded-results-header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -777,12 +790,14 @@ body::before {
   margin-bottom: 14px;
 }
 
-.embedded-selector-header h3 {
+.embedded-selector-header h3,
+.embedded-results-header h3 {
   margin: 0;
   font-size: 1.08rem;
 }
 
-.embedded-selector .program-selector {
+.embedded-selector .program-selector,
+.embedded-results .missions-groups {
   padding: 0;
 }
 
@@ -1417,6 +1432,30 @@ td {
   background: rgba(100, 40, 180, 0.1);
   border-bottom: 1px solid var(--ai-border);
   flex-wrap: wrap;
+  cursor: pointer;
+  list-style: none;
+}
+
+.ai-rec-header::-webkit-details-marker {
+  display: none;
+}
+
+.ai-rec-header::after {
+  content: "Ocultar";
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ai-rec-card:not([open]) .ai-rec-header {
+  border-bottom: 0;
+}
+
+.ai-rec-card:not([open]) .ai-rec-header::after {
+  content: "Mostrar";
 }
 
 .ai-rec-badge {
@@ -1950,11 +1989,11 @@ td {
   }
 
   .workflow-grid {
+    grid-template-areas:
+      "discover"
+      "scan"
+      "ai";
     grid-template-columns: 1fr;
-  }
-
-  .workflow-step:nth-child(2) {
-    grid-column: auto;
   }
 
   .workflow-actions {

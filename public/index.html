@@ -127,7 +127,7 @@
         </article>
 
         <div class="workflow-grid">
-          <article class="workflow-step">
+          <article class="workflow-step workflow-step-discovery">
             <p class="workflow-step-number">Paso 2</p>
             <h2>Descubrir contenido</h2>
             <p class="workflow-copy">Actualiza el catalogo cuando MLB agregue programas nuevos o cambien los nombres.</p>
@@ -137,7 +137,7 @@
             </div>
           </article>
 
-          <article class="workflow-step">
+          <article class="workflow-step workflow-step-scan">
             <p class="workflow-step-number">Paso 3</p>
             <h2>Escanear objetivos</h2>
             <p class="workflow-copy">Marca los programas que te interesan y lee sus misiones, progreso y cartas sugeridas.</p>
@@ -158,6 +158,15 @@
               </div>
               <div id="program-selector" class="program-selector"></div>
             </div>
+            <div class="embedded-results">
+              <div class="embedded-results-header">
+                <div>
+                  <p class="panel-label">Resultados</p>
+                  <h3>Objetivos sugeridos</h3>
+                </div>
+              </div>
+              <div id="missions-groups" class="missions-groups"></div>
+            </div>
           </article>
 
           <article class="workflow-step workflow-step-ai">
@@ -175,17 +184,6 @@
       <span id="inventory-time" class="visually-hidden">Todavia no ejecutado</span>
 
       <section id="error-banner" class="error-banner hidden"></section>
-
-      <section class="panel table-panel">
-        <div class="table-header">
-          <div>
-            <p class="panel-label">Resultados</p>
-            <h2>Objetivos sugeridos</h2>
-          </div>
-        </div>
-
-        <div id="missions-groups" class="missions-groups"></div>
-      </section>
 
       <section id="internal-panel" class="panel ai-panel hidden">
         <div class="table-header ai-panel-header">

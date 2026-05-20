@@ -1700,8 +1700,8 @@ function renderInternalObjectiveReport(report) {
 
 function renderInternalRecommendation(rec, index) {
   return `
-    <div class="ai-rec-card internal-rec-card">
-      <div class="ai-rec-header">
+    <details class="ai-rec-card internal-rec-card" open>
+      <summary class="ai-rec-header">
         <div class="ai-rec-badge">${index + 1}</div>
         <div class="ai-rec-meta">
           <div class="ai-rec-programs">
@@ -1709,7 +1709,7 @@ function renderInternalRecommendation(rec, index) {
           </div>
         </div>
         <div class="ai-rec-count">${rec.missions.length} objetivo${rec.missions.length !== 1 ? 's' : ''}</div>
-      </div>
+      </summary>
       <div class="ai-strategy">
         <span class="ai-field-label">Plan general</span>
         <p>${escapeHtml(buildInternalPlanText(rec))}</p>
@@ -1750,7 +1750,7 @@ function renderInternalRecommendation(rec, index) {
           </div>
         </div>
       ` : ''}
-    </div>
+    </details>
   `;
 }
 
@@ -2147,8 +2147,8 @@ function renderAiRecommendationCard(rec, index) {
   const suggestedCards = cards.filter((c) => !c.in_inventory);
 
   return `
-    <div class="ai-rec-card">
-      <div class="ai-rec-header">
+    <details class="ai-rec-card" open>
+      <summary class="ai-rec-header">
         <div class="ai-rec-badge">${index}</div>
         <div class="ai-rec-meta">
           <div class="ai-rec-programs">
@@ -2159,7 +2159,7 @@ function renderAiRecommendationCard(rec, index) {
           </div>
         </div>
         <div class="ai-rec-count">${missions.length} objetivo${missions.length !== 1 ? 's' : ''}</div>
-      </div>
+      </summary>
 
       ${strategy ? `
         <div class="ai-strategy">
@@ -2192,7 +2192,7 @@ function renderAiRecommendationCard(rec, index) {
           </div>
         </div>
       ` : ''}
-    </div>
+    </details>
   `;
 }
 
